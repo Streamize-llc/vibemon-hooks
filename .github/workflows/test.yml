@@ -40,13 +40,12 @@ jobs:
           HOME: ${{ runner.temp }}/test-home
         run: |
           mkdir -p "$HOME"
-          # Inject a dummy Supabase URL since the script needs one to write notify.sh
+          # Inject a dummy Supabase URL — connection probe will hang against
+          # this fake host. We use `perl -e 'alarm N; exec @ARGV'` because it
+          # works on both macOS (no `timeout`) and Linux.
           sed "s|__SUPABASE_URL__|https://dummy.supabase.co|g" dist/install.sh > /tmp/probe.sh
-          # The connection test will fail (dummy URL) — accept that, just verify
-          # the install steps before "Testing connection" complete cleanly.
-          # We do this by killing after notify.sh + settings.json writes, before curl.
           (
-            timeout 5 bash /tmp/probe.sh dummy_api_key || true
+            perl -e 'alarm 8; exec @ARGV' bash /tmp/probe.sh dummy_api_key || true
           ) > /tmp/install.log 2>&1
           echo "=== install log ==="
           cat /tmp/install.log
