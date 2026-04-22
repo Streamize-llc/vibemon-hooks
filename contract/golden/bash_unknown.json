@@ -1,0 +1,20 @@
+{
+  "agent": "claude_code",
+  "cwd": "/Users/x/proj",
+  "event": "bash",
+  "payload": {
+    "project_root": "user/repo",
+    "session_id": "sess-bash-3",
+    "tool_input": {},
+    "tool_name": "Bash"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-bash-3",
+  "signals": {
+    "bash.byte_len": 35,
+    "bash.category": "unknown",
+    "bash.head": "some-tool-we-dont-know",
+    "tool.name": "bash"
+  },
+  "v": 2
+}

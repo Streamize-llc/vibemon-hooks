@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vibemon.dev/schemas/envelope-v2.json",
+  "title": "VibeMon Hook Envelope v2",
+  "description": "Wire format that notify.sh POSTs to /functions/v1/hook. The server (vibemon-app) must accept any document conforming to this schema; new optional fields can be added without bumping v.",
+  "type": "object",
+  "required": ["v", "event", "agent", "cwd", "timestamp", "payload", "signals"],
+  "additionalProperties": true,
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 2,
+      "description": "Envelope version. Bump only when the contract breaks backward compatibility."
+    },
+    "event": {
+      "type": "string",
+      "enum": ["activity", "bash", "prompt", "stop", "permission", "tool_failure", "session_start", "session_end", "test"],
+      "description": "Logical event name. activity = file edit (Edit/Write/NotebookEdit), bash = Bash tool use (no drops)."
+    },
+    "agent": {
+      "type": "string",
+      "enum": ["claude_code", "gemini_cli", "cursor", "codex_cli"],
+      "description": "Source agent that fired the hook."
+    },
+    "session_id": {
+      "type": ["string", "null"],
+      "description": "Agent's session identifier. Used for multi-session rate limiting and timeline reconstruction."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory at hook fire time."
+    },
+    "project_root": {
+      "type": "string",
+      "description": "Best-effort project identifier. owner/repo from git remote, or basename of git toplevel, or empty."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO-8601. Set by notify.sh, not the agent."
+    },
+    "local_hour": {
+      "type": ["integer", "null"],
+      "minimum": 0, "maximum": 23,
+      "description": "Hour-of-day in the user's local timezone."
+    },
+    "local_dow": {
+      "type": ["integer", "null"],
+      "minimum": 0, "maximum": 6,
+      "description": "Day-of-week (0=Monday) in local time."
+    },
+    "local_tz": {
+      "type": "string",
+      "description": "tzinfo string (e.g. 'Asia/Seoul', 'KST'). Server persists to profiles.timezone."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Sanitized agent payload. Body content stripped — only safe meta keys remain.",
+      "additionalProperties": true
+    },
+    "signals": {
+      "$ref": "#/$defs/signals"
+    }
+  },
+  "$defs": {
+    "signals": {
+      "type": "object",
+      "description": "Sparse derived behavioral signals. All keys are optional; categories are open-ended (server stores unknown keys verbatim into hook_events.signals JSONB).",
+      "additionalProperties": true,
+      "properties": {
+        "file.ext":         { "type": "string", "description": "File extension (lowercase, no dot)." },
+        "file.depth":       { "type": "integer", "minimum": 0, "description": "Slash count in file path." },
+        "file.is_test":     { "type": "boolean" },
+        "file.is_config":   { "type": "boolean" },
+        "file.is_doc":      { "type": "boolean" },
+        "lines.added":      { "type": "integer", "minimum": 0 },
+        "lines.removed":    { "type": "integer", "minimum": 0 },
+        "lines.net":        { "type": "integer" },
+        "bash.category": {
+          "type": "string",
+          "description": "Categorized first-token group. Open-ended; common values listed for reference.",
+          "examples": [
+            "git.commit", "git.push", "git.sync", "git.read", "git.rewrite", "git.branch", "git.other",
+            "github.pr_write", "github.other",
+            "pkg.test", "pkg.install", "pkg.build", "pkg.lint", "pkg.run", "pkg.other",
+            "test.run", "lint.run",
+            "infra.docker", "infra.k8s", "infra.iac",
+            "net.request", "net.transfer",
+            "fs.mutate", "fs.read", "fs.search", "fs.create",
+            "db.client", "deploy", "runtime", "build.sys",
+            "shell.builtin", "shell.nav", "pkg.system",
+            "editor", "mobile.expo", "mobile.build", "unknown"
+          ]
+        },
+        "bash.head":         { "type": "string", "maxLength": 32, "description": "First whitespace-delimited token of the command (capped to 32 chars)." },
+        "bash.byte_len":     { "type": "integer", "minimum": 0, "description": "Original command byte length (the body itself is NEVER sent)." },
+        "prompt.chars":      { "type": "integer", "minimum": 0 },
+        "prompt.bucket":     { "type": "string", "enum": ["XS", "S", "M", "L", "XL"] },
+        "prompt.has_question":   { "type": "boolean" },
+        "prompt.has_code_fence": { "type": "boolean" },
+        "prompt.line_count": { "type": "integer", "minimum": 1 },
+        "prompt.lang_hint":  { "type": "string", "enum": ["ko", "en", "mixed"] },
+        "failure.kind": {
+          "type": "string",
+          "enum": ["file_not_found", "permission", "string_mismatch", "syntax", "timeout", "network", "type_error", "other"]
+        },
+        "failure.byte_len":  { "type": "integer", "minimum": 0 },
+        "tool.name":         { "type": "string" },
+        "tool.is_subagent":  { "type": "boolean" }
+      }
+    }
+  }
+}

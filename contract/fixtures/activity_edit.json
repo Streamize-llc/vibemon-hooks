@@ -1,0 +1,10 @@
+{
+  "event_type": "activity",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/Users/x/proj/src/components/Button.tsx",
+    "old_string": "<button onClick={onPress}>",
+    "new_string": "<button\n  onClick={onPress}\n  disabled={loading}\n>"
+  },
+  "session_id": "sess-edit-1"
+}

@@ -1,0 +1,23 @@
+{
+  "agent": "claude_code",
+  "cwd": "/Users/x/proj",
+  "event": "tool_failure",
+  "payload": {
+    "project_root": "user/repo",
+    "session_id": "sess-fail-1",
+    "tool_input": {
+      "file_path": "/Users/x/proj/src/old.ts"
+    },
+    "tool_name": "Edit"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-fail-1",
+  "signals": {
+    "failure.byte_len": 104,
+    "failure.kind": "string_mismatch",
+    "file.depth": 5,
+    "file.ext": "ts",
+    "tool.name": "edit"
+  },
+  "v": 2
+}

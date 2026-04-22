@@ -1,0 +1,20 @@
+{
+  "agent": "claude_code",
+  "cwd": "/Users/x/proj",
+  "event": "prompt",
+  "payload": {
+    "project_root": "user/repo",
+    "session_id": "sess-prompt-1"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-prompt-1",
+  "signals": {
+    "prompt.bucket": "XS",
+    "prompt.chars": 33,
+    "prompt.has_code_fence": false,
+    "prompt.has_question": true,
+    "prompt.lang_hint": "ko",
+    "prompt.line_count": 1
+  },
+  "v": 2
+}

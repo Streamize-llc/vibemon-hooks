@@ -1,0 +1,11 @@
+{
+  "event_type": "activity",
+  "_meta_only_for_test": "this _key_ ignored by extract; tests use it to drive VIBEMON_EVT",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/Users/x/proj/src/utils/helper.ts",
+    "content": "export function add(a: number, b: number) {\n  return a + b;\n}\n"
+  },
+  "session_id": "sess-write-1",
+  "cwd": "/Users/x/proj"
+}

@@ -1,0 +1,20 @@
+{
+  "agent": "claude_code",
+  "cwd": "/Users/x/proj",
+  "event": "bash",
+  "payload": {
+    "project_root": "user/repo",
+    "session_id": "sess-bash-2",
+    "tool_input": {},
+    "tool_name": "Bash"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-bash-2",
+  "signals": {
+    "bash.byte_len": 26,
+    "bash.category": "pkg.test",
+    "bash.head": "npm",
+    "tool.name": "bash"
+  },
+  "v": 2
+}

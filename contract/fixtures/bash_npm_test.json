@@ -1,0 +1,8 @@
+{
+  "event_type": "bash",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm run test --watch=false"
+  },
+  "session_id": "sess-bash-2"
+}

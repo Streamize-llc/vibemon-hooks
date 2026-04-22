@@ -1,0 +1,9 @@
+{
+  "event_type": "tool_failure",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/Users/x/proj/src/old.ts"
+  },
+  "error": "String to replace not found in file. The old_string was: foo bar baz, but the file contains: foo qux baz",
+  "session_id": "sess-fail-1"
+}

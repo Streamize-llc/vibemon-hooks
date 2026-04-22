@@ -1,0 +1,7 @@
+{
+  "event_type": "session_start",
+  "cwd": "/Users/x/proj",
+  "session_id": "sess-start-1",
+  "source": "startup",
+  "model": "claude-sonnet-4-6"
+}

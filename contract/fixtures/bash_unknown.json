@@ -1,0 +1,8 @@
+{
+  "event_type": "bash",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "some-tool-we-dont-know --flag value"
+  },
+  "session_id": "sess-bash-3"
+}

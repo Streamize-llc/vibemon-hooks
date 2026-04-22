@@ -1,0 +1,26 @@
+{
+  "agent": "claude_code",
+  "cwd": "/Users/x/proj",
+  "event": "activity",
+  "payload": {
+    "lines_added": 3,
+    "lines_removed": 0,
+    "project_root": "user/repo",
+    "session_id": "sess-edit-1",
+    "tool_input": {
+      "file_path": "/Users/x/proj/src/components/Button.tsx"
+    },
+    "tool_name": "Edit"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-edit-1",
+  "signals": {
+    "file.depth": 6,
+    "file.ext": "tsx",
+    "lines.added": 3,
+    "lines.net": 3,
+    "lines.removed": 0,
+    "tool.name": "edit"
+  },
+  "v": 2
+}

@@ -1,0 +1,27 @@
+{
+  "agent": "claude_code",
+  "cwd": "/Users/x/proj",
+  "event": "activity",
+  "payload": {
+    "cwd": "/Users/x/proj",
+    "lines_added": 3,
+    "lines_removed": 0,
+    "project_root": "user/repo",
+    "session_id": "sess-write-1",
+    "tool_input": {
+      "file_path": "/Users/x/proj/src/utils/helper.ts"
+    },
+    "tool_name": "Write"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-write-1",
+  "signals": {
+    "file.depth": 6,
+    "file.ext": "ts",
+    "lines.added": 3,
+    "lines.net": 3,
+    "lines.removed": 0,
+    "tool.name": "write"
+  },
+  "v": 2
+}

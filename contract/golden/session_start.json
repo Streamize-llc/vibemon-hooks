@@ -1,0 +1,16 @@
+{
+  "agent": "claude_code",
+  "cwd": "/Users/x/proj",
+  "event": "session_start",
+  "payload": {
+    "cwd": "/Users/x/proj",
+    "model": "claude-sonnet-4-6",
+    "project_root": "user/repo",
+    "session_id": "sess-start-1",
+    "source": "startup"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-start-1",
+  "signals": {},
+  "v": 2
+}

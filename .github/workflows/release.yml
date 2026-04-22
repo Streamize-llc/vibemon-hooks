@@ -1,0 +1,59 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Verify VERSION matches tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VER="v$(cat VERSION | tr -d '[:space:]')"
+          if [ "$TAG" != "$VER" ]; then
+            echo "Tag ($TAG) does not match VERSION file ($VER)"
+            exit 1
+          fi
+
+      - name: Build
+        run: python3 scripts/build.py
+
+      - name: Verify reproducibility
+        run: python3 scripts/build.py --check
+
+      - name: Run all tests
+        run: python3 -m pytest tests/ -v
+
+      - name: Compute release artifacts
+        run: |
+          mkdir -p release
+          cp dist/install.sh release/install.sh
+          cp dist/install.sh.sha256 release/install.sh.sha256
+          # Also compute sha256 inline for double-check
+          sha256sum dist/install.sh > release/sha256sum.txt
+          cat release/sha256sum.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/install.sh
+            release/install.sh.sha256
+            release/sha256sum.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true

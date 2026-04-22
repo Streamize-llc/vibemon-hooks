@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Test artifacts
+.coverage
+htmlcov/
+/tmp/
+.tmp/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local env
+.env
+.env.local
+
+# Build cache (dist/install.sh IS committed for reproducibility)
+build.log

@@ -1,0 +1,65 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Build dist/install.sh
+        run: python3 scripts/build.py
+
+      - name: Verify dist/install.sh is committed and reproducible
+        run: python3 scripts/build.py --check
+
+      - name: Run all tests
+        run: python3 -m pytest tests/ -v
+
+      - name: bash -n on dist/install.sh
+        run: bash -n dist/install.sh
+
+      - name: Dry-install into a temp HOME
+        env:
+          HOME: ${{ runner.temp }}/test-home
+        run: |
+          mkdir -p "$HOME"
+          # Inject a dummy Supabase URL since the script needs one to write notify.sh
+          sed "s|__SUPABASE_URL__|https://dummy.supabase.co|g" dist/install.sh > /tmp/probe.sh
+          # The connection test will fail (dummy URL) — accept that, just verify
+          # the install steps before "Testing connection" complete cleanly.
+          # We do this by killing after notify.sh + settings.json writes, before curl.
+          (
+            timeout 5 bash /tmp/probe.sh dummy_api_key || true
+          ) > /tmp/install.log 2>&1
+          echo "=== install log ==="
+          cat /tmp/install.log
+          echo "=== installed files ==="
+          ls -la "$HOME/.vibemon/" || true
+          test -f "$HOME/.vibemon/notify.sh" || (echo "notify.sh not installed" && exit 1)
+          test -f "$HOME/.vibemon/api-key" || (echo "api-key not saved" && exit 1)
+          bash -n "$HOME/.vibemon/notify.sh"
+          echo "✓ notify.sh syntax valid after real install"
+
+      - name: Privacy canary summary
+        run: |
+          python3 -m pytest tests/test_privacy_canary.py -v 2>&1 | tee /tmp/canary.log
+          echo "===================="
+          echo "Privacy invariants: PASSED"
+          echo "===================="
