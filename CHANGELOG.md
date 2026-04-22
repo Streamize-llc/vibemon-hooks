@@ -1,5 +1,23 @@
 # Changelog
 
+## v11 — 2026-04-22
+
+Auto-update hardening — `notify.sh` now follows redirects on the version
+probe (`?v`) and validates the response shape before re-running install.
+
+### Bug fix
+- `curl -sf "https://vibemon.dev/install.sh?v"` did not pass `-L`, so when
+  the apex domain 307-redirects to `www.vibemon.dev` (default Vercel
+  behavior), the probe returned the literal HTML body `"Redirecting..."`.
+  The version compare then always evaluated as "different" but the install
+  fetch (which DID use `-fsSL`) succeeded — so no harm except that the
+  probe was effectively useless. Now uses `-fsSL` consistently.
+
+### Defense in depth
+- Version compare now rejects values longer than 16 chars before triggering
+  a re-install. If the probe ever returns garbage again, we don't blindly
+  pipe an unknown payload to `bash -s`.
+
 ## v10 — 2026-04-22
 
 Initial extraction of `vibemon-hooks` as a separate, public, audit-friendly

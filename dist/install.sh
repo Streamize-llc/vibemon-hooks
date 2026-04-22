@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="10"
+VIBEMON_VERSION="11"
 API_KEY="${1:-}"
 IS_UPDATE=false
 if [ -z "$API_KEY" ]; then
@@ -112,10 +112,13 @@ if [ "$EVENT_TYPE" = "session_start" ]; then
     fi
     printf '%s' "$NOW" > "$LAST_CHECK"
     local LATEST
-    LATEST=$(curl -sf "https://vibemon.dev/install.sh?v" 2>/dev/null || true)
+    # -L is critical: vibemon.dev → www.vibemon.dev is a 307 on Vercel,
+    # without -L curl returns "Redirecting..." and the version compare breaks.
+    LATEST=$(curl -fsSL "https://vibemon.dev/install.sh?v" 2>/dev/null || true)
     local CURRENT=""
     [ -f "$VIBEMON_DIR/version" ] && CURRENT=$(cat "$VIBEMON_DIR/version")
-    if [ -n "$LATEST" ] && [ "$LATEST" != "$CURRENT" ]; then
+    # Sanity: LATEST must be a short numeric/version-ish string, not an HTML body.
+    if [ -n "$LATEST" ] && [ ${#LATEST} -le 16 ] && [ "$LATEST" != "$CURRENT" ]; then
       curl -fsSL "https://vibemon.dev/install.sh" 2>/dev/null | bash -s 2>/dev/null
     fi
   }
