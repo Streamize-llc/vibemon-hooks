@@ -12,7 +12,11 @@ set -euo pipefail
 
 VIBEMON_DIR="$HOME/.vibemon"
 API_KEY_FILE="$VIBEMON_DIR/api-key"
-API_URL="__SUPABASE_URL__/functions/v1"
+# Supabase project URL is public information (also visible in
+# NEXT_PUBLIC_SUPABASE_URL on vibemon.dev and inside the mobile app).
+# Hardcoded so vibemon.dev can serve install.sh as a simple 302 redirect
+# to the GitHub Release artifact, without any server-side string substitution.
+API_URL="https://sirpdtcwawcidhgtltps.supabase.co/functions/v1"
 
 if [ ! -f "$API_KEY_FILE" ]; then
   echo "[vibemon] API key not found at $API_KEY_FILE" >&2

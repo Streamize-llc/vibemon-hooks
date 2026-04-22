@@ -31,7 +31,7 @@ for cmd in curl python3; do
   fi
 done
 
-API_URL="__SUPABASE_URL__/functions/v1"
+API_URL="https://sirpdtcwawcidhgtltps.supabase.co/functions/v1"
 
 VIBEMON_DIR="$HOME/.vibemon"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
@@ -60,9 +60,6 @@ cat > "$VIBEMON_DIR/notify.sh" << 'NOTIFY_SCRIPT'
 # %%EMBED:notify.sh%%
 NOTIFY_SCRIPT
 
-# Replace placeholder URL in the installed notify.sh
-sed -i.bak "s|__SUPABASE_URL__|${API_URL%/functions/v1}|g" "$VIBEMON_DIR/notify.sh"
-rm -f "$VIBEMON_DIR/notify.sh.bak"
 chmod 0755 "$VIBEMON_DIR/notify.sh"
 echo "  ✓ notify.sh installed"
 

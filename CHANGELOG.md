@@ -1,5 +1,30 @@
 # Changelog
 
+## v12 — 2026-04-22
+
+Bake the Supabase project URL into the install scripts so `vibemon.dev`
+can serve `install.sh` as a pure 302 redirect to the GitHub Release
+artifact — no server-side fetch, no risk of edge-function timeout.
+
+### Why
+v11 deployed via `vibemon-web/install.sh/route.ts` doing a server-side
+`fetch` against the GitHub Release. Vercel's edge function repeatedly
+hit `FUNCTION_INVOCATION_TIMEOUT` against `releases/latest/download/...`
+(redirect chain), serving HTTP 504 to every install request.
+
+### What changed
+- `src/install.sh` and `src/notify.sh` now have the full Supabase URL
+  (`https://sirpdtcwawcidhgtltps.supabase.co`) hardcoded. This URL is
+  already public — exposed via `NEXT_PUBLIC_SUPABASE_URL` on the website
+  and embedded in the mobile app binary.
+- The `__SUPABASE_URL__` placeholder is gone.
+- `install.sh` no longer needs a final `sed` to patch notify.sh.
+
+### Distribution implication
+`vibemon.dev/install.sh` becomes a 302 → GitHub Release. Users see the
+real `github.com/Streamize-llc/vibemon-hooks` URL in their terminal,
+which is a stronger trust signal than a proxy.
+
 ## v11 — 2026-04-22
 
 Auto-update hardening — `notify.sh` now follows redirects on the version

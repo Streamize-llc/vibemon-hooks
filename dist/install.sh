@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="11"
+VIBEMON_VERSION="12"
 API_KEY="${1:-}"
 IS_UPDATE=false
 if [ -z "$API_KEY" ]; then
@@ -31,7 +31,7 @@ for cmd in curl python3; do
   fi
 done
 
-API_URL="__SUPABASE_URL__/functions/v1"
+API_URL="https://sirpdtcwawcidhgtltps.supabase.co/functions/v1"
 
 VIBEMON_DIR="$HOME/.vibemon"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
@@ -71,7 +71,11 @@ set -euo pipefail
 
 VIBEMON_DIR="$HOME/.vibemon"
 API_KEY_FILE="$VIBEMON_DIR/api-key"
-API_URL="__SUPABASE_URL__/functions/v1"
+# Supabase project URL is public information (also visible in
+# NEXT_PUBLIC_SUPABASE_URL on vibemon.dev and inside the mobile app).
+# Hardcoded so vibemon.dev can serve install.sh as a simple 302 redirect
+# to the GitHub Release artifact, without any server-side string substitution.
+API_URL="https://sirpdtcwawcidhgtltps.supabase.co/functions/v1"
 
 if [ ! -f "$API_KEY_FILE" ]; then
   echo "[vibemon] API key not found at $API_KEY_FILE" >&2
@@ -637,9 +641,6 @@ if [ "$AGENT" = "gemini_cli" ]; then
 fi
 NOTIFY_SCRIPT
 
-# Replace placeholder URL in the installed notify.sh
-sed -i.bak "s|__SUPABASE_URL__|${API_URL%/functions/v1}|g" "$VIBEMON_DIR/notify.sh"
-rm -f "$VIBEMON_DIR/notify.sh.bak"
 chmod 0755 "$VIBEMON_DIR/notify.sh"
 echo "  ✓ notify.sh installed"
 
