@@ -1,5 +1,43 @@
 # Changelog
 
+## v15 — 2026-04-24
+
+Shell-chain support: agent-issued commands like `git add . && git
+commit -m "feat: x" && git push` now classify as `git.commit` (not
+`git.other`) and extract the commit message title.
+
+### Why
+v13/v14 matched commit commands on `tokens[0] == "git" && tokens[1] ==
+"commit"`. Claude Code / Cursor / Gemini CLI routinely emit chained
+commands as a single Bash tool call — `git add . && git commit -m "…"
+&& git push` — where the first token is `git add`. The chain was
+silently dropped from commit-message collection, so the Commit Tape
+feature saw empty data from agent-driven sessions in the wild.
+
+### What changed
+- `classify.py` tokenizes with
+  `shlex.shlex(punctuation_chars=True)` — a stdlib-only approach.
+  Chain separators (`&&`, `||`, `;`, `|`, newline) become their own
+  tokens; quoted separators inside `git commit -m "feat && fix"` stay
+  in the message token (POSIX quoting from stdlib, no hand-rolled
+  state machine).
+- `classify_bash` classifies each chain segment and picks the
+  highest-priority category from `_CHAIN_PRIORITY` (git.commit >
+  deploy > git.push > test.run > …). No priority match → first
+  segment's classification.
+- `extract_commit_message` iterates the same tokenized segments,
+  parsing `-m` / `--message=` / combined short flags (`-am`, `-ma`)
+  on whichever segment starts with `git commit`.
+- Tests: 58 → 68. New `test_chain_tokens_*`, `test_chain_*`, and
+  `test_extract_commit_message_chain` cases cover `&&`/`;` chains,
+  quoted separator preservation, priority ordering, and the canary
+  still-doesn't-leak invariant on chained input.
+
+### Privacy
+No new data captured — just unlocks the title extraction path that
+v14 already documented. Multi-line commit bodies are still discarded.
+Existing privacy canary suite still passes on chained fixtures.
+
 ## v14 — 2026-04-24
 
 Expose commit message collection as an explicit install-time flag so the

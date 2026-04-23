@@ -14,6 +14,7 @@ from extract import (
     FORBIDDEN_TOP_KEYS,
     SAFE_TOP_KEYS,
 )
+from classify import extract_commit_message
 
 
 # ─── pure helpers ─────────────────────────────────────────────────────
@@ -210,3 +211,55 @@ def test_build_envelope_shape():
     assert env["payload"]["tool_input"] == {"file_path": "/x.ts"}
     assert env["payload"]["lines_added"] == 1
     assert env["signals"]["file.ext"] == "ts"
+
+
+# ─── extract_commit_message ───────────────────────────────────────────
+def test_extract_commit_message_single():
+    assert extract_commit_message("git commit -m 'feat: x'") == "feat: x"
+    assert extract_commit_message('git commit -m "fix: bug"') == "fix: bug"
+    assert extract_commit_message("git commit -am 'chore: bump'") == "chore: bump"
+    assert extract_commit_message("git commit --message='docs: y'") == "docs: y"
+    assert extract_commit_message("git commit --message 'refactor: z'") == "refactor: z"
+
+
+def test_extract_commit_message_first_line_only():
+    # Multi-line commits — body discarded, title only.
+    cmd = 'git commit -m "feat: header\n\nBody paragraph with CANARY"'
+    result = extract_commit_message(cmd)
+    assert result == "feat: header"
+    assert "CANARY" not in result
+
+
+def test_extract_commit_message_200_cap():
+    long = "feat: " + ("x" * 500)
+    cmd = f"git commit -m '{long}'"
+    result = extract_commit_message(cmd)
+    assert len(result) == 200
+
+
+def test_extract_commit_message_chain():
+    # The bug this v15 change fixes — agent-issued chains must yield the
+    # commit title. Previously returned "" because the first token was
+    # `git add`, not `git commit`.
+    chain = "git add -A && git commit -m 'feat: smoke chain' && git push"
+    assert extract_commit_message(chain) == "feat: smoke chain"
+    # Semicolon variant.
+    assert (
+        extract_commit_message("git add . ; git commit -m 'fix: y' ; git push")
+        == "fix: y"
+    )
+    # Quoted && inside message must not be treated as a separator.
+    assert (
+        extract_commit_message('git commit -m "feat: a && b operator"')
+        == "feat: a && b operator"
+    )
+    # Chain WITHOUT a commit returns "".
+    assert extract_commit_message("git add . && git push") == ""
+
+
+def test_extract_commit_message_empty_or_invalid():
+    assert extract_commit_message("") == ""
+    assert extract_commit_message(None) == ""
+    assert extract_commit_message("echo hello") == ""
+    assert extract_commit_message("git commit") == ""  # no -m
+    assert extract_commit_message("git commit --amend") == ""  # no -m

@@ -1,7 +1,7 @@
 """Unit tests for classify_bash. The single most important categorical
 function — every signal-driven narrative depends on this being correct."""
 
-from classify import classify_bash
+from classify import classify_bash, _chain_token_segments
 
 
 def test_empty():
@@ -114,4 +114,55 @@ def test_never_returns_command_body():
     result = classify_bash(secret)
     assert "CANARY" not in result
     assert "secret" not in result
+    assert result == "git.commit"
+
+
+def test_chain_tokens_basic():
+    assert _chain_token_segments("git add .") == [["git", "add", "."]]
+    assert _chain_token_segments("git add . && git commit") == [
+        ["git", "add", "."],
+        ["git", "commit"],
+    ]
+    assert _chain_token_segments("a && b || c ; d | e") == [
+        ["a"], ["b"], ["c"], ["d"], ["e"],
+    ]
+    assert _chain_token_segments("") == []
+
+
+def test_chain_tokens_respects_quotes():
+    # Chain separators inside quoted commit messages must NOT split.
+    cmd = 'git commit -m "feat && fix || revert: do; pipe | flow"'
+    segs = _chain_token_segments(cmd)
+    assert len(segs) == 1
+    # The message stays as one token (shlex strips the outer quotes).
+    assert segs[0][-1] == "feat && fix || revert: do; pipe | flow"
+
+
+def test_chain_prefers_git_commit():
+    # Real-world agent pattern — `git add . && git commit -m "x" && git push`.
+    # Previously classified as `git.other` (first-token-only). Must now win
+    # with `git.commit` so the activity feed + commit tape stay non-empty.
+    assert classify_bash("git add . && git commit -m 'feat: x' && git push") == "git.commit"
+    assert classify_bash("git add -A && git commit -am 'fix' && git push origin main") == "git.commit"
+    # Semicolon + pipe variants.
+    assert classify_bash("git add . ; git commit -m 'y' ; git push") == "git.commit"
+    # Test run mixed with git — test.run has lower priority than git.commit,
+    # so commit wins.
+    assert classify_bash("npm test && git commit -m 'pass'") == "git.commit"
+
+
+def test_chain_picks_highest_priority():
+    # No commit in chain — deploy beats git.push.
+    assert classify_bash("git push && vercel deploy") == "deploy"
+    # git.push beats test.run (share-the-work > local verification).
+    assert classify_bash("pytest && git push") == "git.push"
+    # Only filesystem ops — fall back to first segment classification.
+    assert classify_bash("ls -la && cat README.md") == "fs.read"
+
+
+def test_chain_never_leaks_body():
+    # The canary check from single-command tests also applies to chains.
+    chained = "npm test && git commit -m 'CANARY_chain_leak_xyz' && git push"
+    result = classify_bash(chained)
+    assert "CANARY" not in result
     assert result == "git.commit"
