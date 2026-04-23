@@ -6,6 +6,48 @@ Pure function — takes a shell command string, returns a category like
 command body. Safe to embed in notify.sh and to import for unit tests.
 """
 
+import shlex
+
+
+COMMIT_MSG_MAX = 200
+
+
+def extract_commit_message(cmd):
+    """Extract the commit message title from a `git commit -m ...` command.
+
+    Returns the first line of the message, capped to COMMIT_MSG_MAX chars.
+    Returns "" for non-commit commands, commands without -m, or unparseable
+    input. Handles single/double quotes, --message=, and combined flags
+    like -am / -ma via shlex tokenization.
+    """
+    s = (cmd or "").strip()
+    if not s:
+        return ""
+    try:
+        tokens = shlex.split(s, posix=True)
+    except ValueError:
+        return ""
+    if len(tokens) < 2 or tokens[0] != "git" or tokens[1] != "commit":
+        return ""
+
+    i = 2
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "-m" or t == "--message":
+            if i + 1 < len(tokens):
+                return tokens[i + 1].split("\n", 1)[0][:COMMIT_MSG_MAX]
+            return ""
+        if t.startswith("--message="):
+            return t[len("--message="):].split("\n", 1)[0][:COMMIT_MSG_MAX]
+        # Combined short flags like -am / -ma / -vam — if "m" is present,
+        # the next token is the message.
+        if t.startswith("-") and not t.startswith("--") and "m" in t[1:]:
+            if i + 1 < len(tokens):
+                return tokens[i + 1].split("\n", 1)[0][:COMMIT_MSG_MAX]
+            return ""
+        i += 1
+    return ""
+
 
 def classify_bash(cmd):
     """Classify a Bash command into a category by its first token.

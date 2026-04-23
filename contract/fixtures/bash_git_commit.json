@@ -2,7 +2,7 @@
   "event_type": "bash",
   "tool_name": "Bash",
   "tool_input": {
-    "command": "git commit -m 'feat: add new feature with secret token TOKEN_HIDE_ME'",
+    "command": "git commit -m 'feat: add live coder feed'",
     "description": "Commit changes"
   },
   "session_id": "sess-bash-1"

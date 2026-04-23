@@ -11,9 +11,10 @@
   "project_root": "user/repo",
   "session_id": "sess-bash-1",
   "signals": {
-    "bash.byte_len": 69,
+    "bash.byte_len": 41,
     "bash.category": "git.commit",
     "bash.head": "git",
+    "commit.message": "feat: add live coder feed",
     "tool.name": "bash"
   },
   "v": 2

@@ -10,8 +10,36 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="12"
-API_KEY="${1:-}"
+VIBEMON_VERSION="14"
+
+# CLI args: one positional API_KEY + optional flags. Flags:
+#   --no-commit-msg       force commit message collection OFF in config
+#   --collect-commit-msg  force commit message collection ON in config
+# When neither flag is given on a re-install, the existing config file
+# is preserved as-is.
+API_KEY=""
+COMMIT_MSG_FLAG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-commit-msg)      COMMIT_MSG_FLAG=1 ;;
+    --collect-commit-msg) COMMIT_MSG_FLAG=0 ;;
+    --*)
+      echo "❌ Unknown flag: $1" >&2
+      echo "Usage: curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY [--no-commit-msg]" >&2
+      exit 1
+      ;;
+    *)
+      if [ -z "$API_KEY" ]; then
+        API_KEY="$1"
+      else
+        echo "❌ Unexpected argument: $1" >&2
+        exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+
 IS_UPDATE=false
 if [ -z "$API_KEY" ]; then
   if [ -f "$HOME/.vibemon/api-key" ]; then
@@ -19,7 +47,7 @@ if [ -z "$API_KEY" ]; then
     IS_UPDATE=true
   else
     echo "❌ API key is required."
-    echo "Usage: curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY"
+    echo "Usage: curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY [--no-commit-msg]"
     exit 1
   fi
 fi
@@ -55,6 +83,32 @@ echo "  ✓ API key saved"
 printf '%s' "$VIBEMON_VERSION" > "$VIBEMON_DIR/version"
 echo "  ✓ Version v$VIBEMON_VERSION recorded"
 
+# ─── 3b. Initialize config file ──────────────────────────────────────
+# Explicit flags (--no-commit-msg / --collect-commit-msg) overwrite the
+# file so re-running install.sh from the app's toggle switches the
+# setting atomically. Without a flag we preserve the user's existing
+# config and only create one on first install.
+_vibemon_write_config() {
+  cat > "$VIBEMON_DIR/config" << VIBEMON_CONFIG_EOF
+# VibeMon config — edit this file to change data-collection behavior.
+# Changes take effect on the next hook fire (no restart needed).
+#
+# Disable git commit message collection (titles are sent by default,
+# first line only, 200 char cap):
+$1
+VIBEMON_CONFIG_EOF
+}
+if [ "$COMMIT_MSG_FLAG" = "1" ]; then
+  _vibemon_write_config "no_commit_msg=1"
+  echo "  ✓ Config written (commit message collection: OFF)"
+elif [ "$COMMIT_MSG_FLAG" = "0" ]; then
+  _vibemon_write_config "# no_commit_msg=1"
+  echo "  ✓ Config written (commit message collection: ON)"
+elif [ ! -f "$VIBEMON_DIR/config" ]; then
+  _vibemon_write_config "# no_commit_msg=1"
+  echo "  ✓ Config file created ($VIBEMON_DIR/config)"
+fi
+
 # ─── 4. Write notify.sh ──────────────────────────────────────────────
 cat > "$VIBEMON_DIR/notify.sh" << 'NOTIFY_SCRIPT'
 #!/usr/bin/env bash
@@ -86,6 +140,19 @@ API_KEY=$(cat "$API_KEY_FILE")
 VIBEMON_VER=$(cat "$VIBEMON_DIR/version" 2>/dev/null || echo "0")
 EVENT_TYPE="${1:-unknown}"
 AGENT="${2:-claude_code}"
+
+# ─── Read user config (opt-outs) ─────────────────────────────────────
+# ~/.vibemon/config is a simple key=value file. Supported keys:
+#   no_commit_msg=1   → strip git commit message from the envelope.
+NO_COMMIT_MSG=""
+if [ -f "$VIBEMON_DIR/config" ]; then
+  while IFS='=' read -r _key _val; do
+    case "$_key" in
+      \#*|"") continue ;;
+      no_commit_msg) NO_COMMIT_MSG="$_val" ;;
+    esac
+  done < "$VIBEMON_DIR/config"
+fi
 
 # Save stdin + reserve envelope output file (the python heredoc body
 # contains triple backticks which break bash's $(...) parser, so we route
@@ -149,6 +216,7 @@ VIBEMON_EVT="$EVENT_TYPE" \
   VIBEMON_ROOT="${PROJECT_ROOT:-}" \
   VIBEMON_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   VIBEMON_FILE="$STDIN_FILE" \
+  VIBEMON_NO_COMMIT_MSG="$NO_COMMIT_MSG" \
   python3 > "$ENV_FILE" 2>/dev/null << 'VIBEMON_PY'
 """
 classify.py — Bash command classifier for VibeMon hook events.
@@ -157,6 +225,48 @@ Pure function — takes a shell command string, returns a category like
 "git.commit" or "pkg.test" or "unknown". Never returns the original
 command body. Safe to embed in notify.sh and to import for unit tests.
 """
+
+import shlex
+
+
+COMMIT_MSG_MAX = 200
+
+
+def extract_commit_message(cmd):
+    """Extract the commit message title from a `git commit -m ...` command.
+
+    Returns the first line of the message, capped to COMMIT_MSG_MAX chars.
+    Returns "" for non-commit commands, commands without -m, or unparseable
+    input. Handles single/double quotes, --message=, and combined flags
+    like -am / -ma via shlex tokenization.
+    """
+    s = (cmd or "").strip()
+    if not s:
+        return ""
+    try:
+        tokens = shlex.split(s, posix=True)
+    except ValueError:
+        return ""
+    if len(tokens) < 2 or tokens[0] != "git" or tokens[1] != "commit":
+        return ""
+
+    i = 2
+    while i < len(tokens):
+        t = tokens[i]
+        if t == "-m" or t == "--message":
+            if i + 1 < len(tokens):
+                return tokens[i + 1].split("\n", 1)[0][:COMMIT_MSG_MAX]
+            return ""
+        if t.startswith("--message="):
+            return t[len("--message="):].split("\n", 1)[0][:COMMIT_MSG_MAX]
+        # Combined short flags like -am / -ma / -vam — if "m" is present,
+        # the next token is the message.
+        if t.startswith("-") and not t.startswith("--") and "m" in t[1:]:
+            if i + 1 < len(tokens):
+                return tokens[i + 1].split("\n", 1)[0][:COMMIT_MSG_MAX]
+            return ""
+        i += 1
+    return ""
 
 
 def classify_bash(cmd):
@@ -284,11 +394,11 @@ except Exception:
     datetime = None
 
 # Embedded for build (notify.sh concatenates classify.py before this file).
-# When imported as a module, `classify_bash` comes from the sibling import.
+# When imported as a module, classifier helpers come from the sibling import.
 try:
-    from classify import classify_bash  # type: ignore
+    from classify import classify_bash, extract_commit_message  # type: ignore
 except ImportError:
-    # If running as a single concatenated script, classify_bash is already
+    # If running as a single concatenated script, these names are already
     # in the module's namespace — defined above by the build step.
     pass
 
@@ -467,7 +577,9 @@ def derive_signals(event, payload):
         if is_doc:
             sig["file.is_doc"] = True
 
-    # Bash classification — body discarded, only category + head + length
+    # Bash classification — body discarded, only category + head + length.
+    # Exception: git commit messages (title only, first line, 200 char cap)
+    # are captured by default. Opt out with VIBEMON_NO_COMMIT_MSG=1.
     if ti and tn in ("bash", "shell", "run_command"):
         cmd = ti.get("command") or ti.get("script") or ""
         if isinstance(cmd, str) and cmd:
@@ -476,6 +588,10 @@ def derive_signals(event, payload):
             sig["bash.category"] = cat
             sig["bash.head"] = head[:32]
             sig["bash.byte_len"] = len(cmd)
+            if cat == "git.commit" and os.environ.get("VIBEMON_NO_COMMIT_MSG", "") != "1":
+                msg = extract_commit_message(cmd)
+                if msg:
+                    sig["commit.message"] = msg
 
     # Prompt shape — body discarded
     if event == "prompt":
@@ -1030,4 +1146,13 @@ if [ "$IS_UPDATE" = true ]; then
 else
   echo "🎉 VibeMon installed successfully!"
   echo "   Your slime will grow as you code with Claude Code, Gemini CLI, Cursor, or Codex."
+  echo ""
+  if [ "$COMMIT_MSG_FLAG" = "1" ]; then
+    echo "   ℹ Git commit message collection: OFF (--no-commit-msg)"
+    echo "     Re-enable anytime: edit ~/.vibemon/config"
+  else
+    echo "   ℹ Git commit message titles (first line, 200 chars) are collected to power"
+    echo "     your activity feed. Opt out anytime:"
+    echo "       echo 'no_commit_msg=1' >> ~/.vibemon/config"
+  fi
 fi

@@ -1,5 +1,54 @@
 # Changelog
 
+## v14 — 2026-04-24
+
+Expose commit message collection as an explicit install-time flag so the
+VibeMon app/web onboarding can surface it as a plain toggle.
+
+### What changed
+- `install.sh` now accepts positional API key + optional flags:
+  - `--no-commit-msg` writes `no_commit_msg=1` into `~/.vibemon/config`
+  - `--collect-commit-msg` writes the commented-out form (explicit opt-in)
+  - No flag on re-install = preserve existing config as-is
+- App `SetupWizard` renders a checkbox under the terminal. Toggling it
+  appends/removes `--no-commit-msg` in the copy-to-clipboard command —
+  the command the user pastes is always self-sufficient.
+- Web `/setup` page mirrors the same toggle. The landing-page
+  `InstallSection` stays static (its command uses the `YOUR_API_KEY`
+  placeholder and links users through to `/setup` for the real flow).
+
+### Why
+v13 made commit-message collection default-on with a hidden opt-out
+file. Onboarding needed to make the choice visible before install,
+without introducing a server-side toggle + polling system. CLI flag +
+UI toggle = zero extra network state, one command line diff.
+
+## v13 — 2026-04-23
+
+Collect git commit message titles by default to power the activity feed.
+
+### What changed
+- `classify.py` gains `extract_commit_message(cmd)` — shlex-tokenizes
+  the command, pulls the message from `-m` / `--message=` / `-am`
+  variants, keeps the first line only, caps at 200 characters.
+- `extract.py` emits `signals.commit.message` when `bash.category ==
+  "git.commit"`, unless the env var `VIBEMON_NO_COMMIT_MSG=1` is set.
+- `notify.sh` reads `~/.vibemon/config` (simple `key=value`) and passes
+  `no_commit_msg=1` through as `VIBEMON_NO_COMMIT_MSG`. No network
+  call needed; flip takes effect on the next hook fire.
+- `install.sh` creates `~/.vibemon/config` on first install (never
+  overwrites existing) and prints an opt-out notice at the end of the
+  first install run.
+- Envelope schema adds `commit.message` (maxLength 200).
+
+### Privacy
+- PRIVACY.md updated: commit-message collection is now an explicit
+  documented exception to the "no command bodies" rule. Multi-line
+  commit bodies are still always discarded — only the title leaves the
+  machine.
+- Existing privacy canary tests still pass (secret-in-`echo` still
+  never leaks; only `-m "…"` titles are extracted).
+
 ## v12 — 2026-04-22
 
 Bake the Supabase project URL into the install scripts so `vibemon.dev`

@@ -11,7 +11,35 @@ set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
 VIBEMON_VERSION="__VIBEMON_VERSION__"
-API_KEY="${1:-}"
+
+# CLI args: one positional API_KEY + optional flags. Flags:
+#   --no-commit-msg       force commit message collection OFF in config
+#   --collect-commit-msg  force commit message collection ON in config
+# When neither flag is given on a re-install, the existing config file
+# is preserved as-is.
+API_KEY=""
+COMMIT_MSG_FLAG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-commit-msg)      COMMIT_MSG_FLAG=1 ;;
+    --collect-commit-msg) COMMIT_MSG_FLAG=0 ;;
+    --*)
+      echo "❌ Unknown flag: $1" >&2
+      echo "Usage: curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY [--no-commit-msg]" >&2
+      exit 1
+      ;;
+    *)
+      if [ -z "$API_KEY" ]; then
+        API_KEY="$1"
+      else
+        echo "❌ Unexpected argument: $1" >&2
+        exit 1
+      fi
+      ;;
+  esac
+  shift
+done
+
 IS_UPDATE=false
 if [ -z "$API_KEY" ]; then
   if [ -f "$HOME/.vibemon/api-key" ]; then
@@ -19,7 +47,7 @@ if [ -z "$API_KEY" ]; then
     IS_UPDATE=true
   else
     echo "❌ API key is required."
-    echo "Usage: curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY"
+    echo "Usage: curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY [--no-commit-msg]"
     exit 1
   fi
 fi
@@ -54,6 +82,32 @@ echo "  ✓ API key saved"
 # ─── 3. Save version ─────────────────────────────────────────────────
 printf '%s' "$VIBEMON_VERSION" > "$VIBEMON_DIR/version"
 echo "  ✓ Version v$VIBEMON_VERSION recorded"
+
+# ─── 3b. Initialize config file ──────────────────────────────────────
+# Explicit flags (--no-commit-msg / --collect-commit-msg) overwrite the
+# file so re-running install.sh from the app's toggle switches the
+# setting atomically. Without a flag we preserve the user's existing
+# config and only create one on first install.
+_vibemon_write_config() {
+  cat > "$VIBEMON_DIR/config" << VIBEMON_CONFIG_EOF
+# VibeMon config — edit this file to change data-collection behavior.
+# Changes take effect on the next hook fire (no restart needed).
+#
+# Disable git commit message collection (titles are sent by default,
+# first line only, 200 char cap):
+$1
+VIBEMON_CONFIG_EOF
+}
+if [ "$COMMIT_MSG_FLAG" = "1" ]; then
+  _vibemon_write_config "no_commit_msg=1"
+  echo "  ✓ Config written (commit message collection: OFF)"
+elif [ "$COMMIT_MSG_FLAG" = "0" ]; then
+  _vibemon_write_config "# no_commit_msg=1"
+  echo "  ✓ Config written (commit message collection: ON)"
+elif [ ! -f "$VIBEMON_DIR/config" ]; then
+  _vibemon_write_config "# no_commit_msg=1"
+  echo "  ✓ Config file created ($VIBEMON_DIR/config)"
+fi
 
 # ─── 4. Write notify.sh ──────────────────────────────────────────────
 cat > "$VIBEMON_DIR/notify.sh" << 'NOTIFY_SCRIPT'
@@ -108,4 +162,13 @@ if [ "$IS_UPDATE" = true ]; then
 else
   echo "🎉 VibeMon installed successfully!"
   echo "   Your slime will grow as you code with Claude Code, Gemini CLI, Cursor, or Codex."
+  echo ""
+  if [ "$COMMIT_MSG_FLAG" = "1" ]; then
+    echo "   ℹ Git commit message collection: OFF (--no-commit-msg)"
+    echo "     Re-enable anytime: edit ~/.vibemon/config"
+  else
+    echo "   ℹ Git commit message titles (first line, 200 chars) are collected to power"
+    echo "     your activity feed. Opt out anytime:"
+    echo "       echo 'no_commit_msg=1' >> ~/.vibemon/config"
+  fi
 fi

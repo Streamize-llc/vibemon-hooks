@@ -26,11 +26,11 @@ except Exception:
     datetime = None
 
 # Embedded for build (notify.sh concatenates classify.py before this file).
-# When imported as a module, `classify_bash` comes from the sibling import.
+# When imported as a module, classifier helpers come from the sibling import.
 try:
-    from classify import classify_bash  # type: ignore
+    from classify import classify_bash, extract_commit_message  # type: ignore
 except ImportError:
-    # If running as a single concatenated script, classify_bash is already
+    # If running as a single concatenated script, these names are already
     # in the module's namespace — defined above by the build step.
     pass
 
@@ -209,7 +209,9 @@ def derive_signals(event, payload):
         if is_doc:
             sig["file.is_doc"] = True
 
-    # Bash classification — body discarded, only category + head + length
+    # Bash classification — body discarded, only category + head + length.
+    # Exception: git commit messages (title only, first line, 200 char cap)
+    # are captured by default. Opt out with VIBEMON_NO_COMMIT_MSG=1.
     if ti and tn in ("bash", "shell", "run_command"):
         cmd = ti.get("command") or ti.get("script") or ""
         if isinstance(cmd, str) and cmd:
@@ -218,6 +220,10 @@ def derive_signals(event, payload):
             sig["bash.category"] = cat
             sig["bash.head"] = head[:32]
             sig["bash.byte_len"] = len(cmd)
+            if cat == "git.commit" and os.environ.get("VIBEMON_NO_COMMIT_MSG", "") != "1":
+                msg = extract_commit_message(cmd)
+                if msg:
+                    sig["commit.message"] = msg
 
     # Prompt shape — body discarded
     if event == "prompt":

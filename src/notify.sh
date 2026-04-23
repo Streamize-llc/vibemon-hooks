@@ -28,6 +28,19 @@ VIBEMON_VER=$(cat "$VIBEMON_DIR/version" 2>/dev/null || echo "0")
 EVENT_TYPE="${1:-unknown}"
 AGENT="${2:-claude_code}"
 
+# ─── Read user config (opt-outs) ─────────────────────────────────────
+# ~/.vibemon/config is a simple key=value file. Supported keys:
+#   no_commit_msg=1   → strip git commit message from the envelope.
+NO_COMMIT_MSG=""
+if [ -f "$VIBEMON_DIR/config" ]; then
+  while IFS='=' read -r _key _val; do
+    case "$_key" in
+      \#*|"") continue ;;
+      no_commit_msg) NO_COMMIT_MSG="$_val" ;;
+    esac
+  done < "$VIBEMON_DIR/config"
+fi
+
 # Save stdin + reserve envelope output file (the python heredoc body
 # contains triple backticks which break bash's $(...) parser, so we route
 # the output through a temp file instead of command substitution).
@@ -90,6 +103,7 @@ VIBEMON_EVT="$EVENT_TYPE" \
   VIBEMON_ROOT="${PROJECT_ROOT:-}" \
   VIBEMON_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   VIBEMON_FILE="$STDIN_FILE" \
+  VIBEMON_NO_COMMIT_MSG="$NO_COMMIT_MSG" \
   python3 > "$ENV_FILE" 2>/dev/null << 'VIBEMON_PY'
 # %%EMBED:classify.py%%
 # %%EMBED:extract.py%%

@@ -9,7 +9,10 @@ in [tests/](tests/) and runs in CI on every PR.
 ## TL;DR
 
 We send categories, lengths, and booleans. We never send code, prompts,
-or shell commands.
+or shell command bodies — with **one narrow exception**: git commit
+message titles (first line, 200 char cap), sent by default so your
+activity feed can show what you shipped. Opt out by adding
+`no_commit_msg=1` to `~/.vibemon/config`.
 
 ---
 
@@ -40,7 +43,8 @@ For each agent hook event, the envelope POSTed to `/hook` contains:
 | `lines.added` / `removed` / `net` | int | non-blank line counts |
 | `bash.category` | enum | `git.commit`, `pkg.test`, `deploy`, `unknown`, etc. (see [SIGNALS.md](SIGNALS.md)) |
 | `bash.head` | string | `git`, `npm` (capped to 32 chars) |
-| `bash.byte_len` | int | length of original command (the **content** is never sent) |
+| `bash.byte_len` | int | length of original command (the **content** is never sent, except `commit.message` below) |
+| `commit.message` | string | git commit message **title only** (first line, 200 char cap). Sent by default for `git commit -m …`. Opt out with `no_commit_msg=1` in `~/.vibemon/config`. Multi-line bodies are discarded. |
 | `prompt.chars` | int | length only |
 | `prompt.bucket` | enum | `XS`/`S`/`M`/`L`/`XL` |
 | `prompt.has_question` | bool | does it contain `?` |
@@ -65,12 +69,30 @@ and to power per-project dashboards. If you don't want this, see
   length, bucket, language hint, and presence of `?` or ` ``` `.
 - **Bash commands** — only the first token (`git`, `npm`) and the
   classified category (`git.commit`) are sent. The rest of the command
-  is read by the classifier in memory and discarded immediately.
+  is read by the classifier in memory and discarded immediately. The
+  one exception is documented below.
 - **Tool responses / stderr / stdout** — `tool_response`, `response`,
   `stderr`, `stdout`, `error` (only the *kind* of failure is sent,
   classified from a brief substring search in memory).
-- **Git commit messages**, branch names, PR titles, secrets in any
-  field — none of these are read by VibeMon.
+- **Branch names, PR titles, secrets in any field** — none of these
+  are read by VibeMon.
+
+### The commit message exception
+
+For `git commit -m "…"` (and `--message=`, `-am`, etc.), the message
+**title** — first line only, 200 character cap — is extracted and sent
+as `signals.commit.message`. This is on by default so your VibeMon
+activity feed can show what you shipped. Multi-line body lines are
+always discarded at the client; only the title ever leaves your machine.
+
+To opt out, add this line to `~/.vibemon/config`:
+
+```
+no_commit_msg=1
+```
+
+The file is created on install with the option commented out. Changes
+take effect on the next hook fire — no restart needed.
 
 ---
 
@@ -113,8 +135,8 @@ is wrong and the maintainers want to know — see
 
 ## Opting out
 
-Two levels of opt-out:
-
+- **Stop sending commit message titles**: add `no_commit_msg=1` to
+  `~/.vibemon/config`. See [The commit message exception](#the-commit-message-exception).
 - **Stop sending file paths**: not currently configurable; would require
   hashing in the extractor. File an issue if you want this.
 - **Uninstall completely**: delete `~/.vibemon/`, remove vibemon entries

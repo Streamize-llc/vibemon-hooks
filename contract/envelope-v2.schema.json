@@ -93,7 +93,8 @@
           ]
         },
         "bash.head":         { "type": "string", "maxLength": 32, "description": "First whitespace-delimited token of the command (capped to 32 chars)." },
-        "bash.byte_len":     { "type": "integer", "minimum": 0, "description": "Original command byte length (the body itself is NEVER sent)." },
+        "bash.byte_len":     { "type": "integer", "minimum": 0, "description": "Original command byte length (the body itself is NEVER sent, except for commit.message below)." },
+        "commit.message":    { "type": "string", "maxLength": 200, "description": "Git commit message title (first line only, 200 char cap). Collected by default from `git commit -m`; opt out with no_commit_msg=1 in ~/.vibemon/config." },
         "prompt.chars":      { "type": "integer", "minimum": 0 },
         "prompt.bucket":     { "type": "string", "enum": ["XS", "S", "M", "L", "XL"] },
         "prompt.has_question":   { "type": "boolean" },
