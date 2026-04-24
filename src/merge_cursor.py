@@ -38,7 +38,7 @@ def merge(hooks_path, notify_prefix=None, hooks_def=None):
     os.makedirs(os.path.dirname(hooks_path) or ".", exist_ok=True)
     config = {}
     if os.path.exists(hooks_path):
-        with open(hooks_path, "r") as f:
+        with open(hooks_path, "r", encoding="utf-8") as f:
             try:
                 config = json.load(f)
             except json.JSONDecodeError:
@@ -52,7 +52,7 @@ def merge(hooks_path, notify_prefix=None, hooks_def=None):
         hooks[event_name] = existing
     config["hooks"] = hooks
 
-    with open(hooks_path, "w") as f:
+    with open(hooks_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
         f.write("\n")
 

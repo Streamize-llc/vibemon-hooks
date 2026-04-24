@@ -76,9 +76,9 @@ def _capture_notify_py_envelope(fixture_path, event, monkeypatch):
     with tempfile.TemporaryDirectory() as d:
         vd = os.path.join(d, ".vibemon")
         os.makedirs(vd)
-        with open(os.path.join(vd, "api-key"), "w") as f:
+        with open(os.path.join(vd, "api-key"), "w", encoding="utf-8") as f:
             f.write("test-api-key")
-        with open(os.path.join(vd, "version"), "w") as f:
+        with open(os.path.join(vd, "version"), "w", encoding="utf-8") as f:
             f.write("999")
 
         monkeypatch.setattr(notify, "_vibemon_dir", lambda: vd)
@@ -86,7 +86,7 @@ def _capture_notify_py_envelope(fixture_path, event, monkeypatch):
         monkeypatch.setattr(notify, "_utc_iso", lambda: "<redacted>")
         monkeypatch.setattr(notify, "_spawn_post", fake_spawn)
 
-        with open(fixture_path) as f:
+        with open(fixture_path, encoding="utf-8") as f:
             raw = json.load(f)
         # Strip the test-only event_type indicator the fixtures use
         raw.pop("event_type", None)
@@ -108,7 +108,7 @@ def _capture_notify_py_envelope(fixture_path, event, monkeypatch):
 def _expected_envelope_via_extract(fixture_path, event):
     """Same shape as notify.sh's extract.main() pipeline — direct
     build_envelope() with the same controlled inputs."""
-    with open(fixture_path) as f:
+    with open(fixture_path, encoding="utf-8") as f:
         raw = json.load(f)
     raw.pop("event_type", None)
     raw.pop("_meta_only_for_test", None)

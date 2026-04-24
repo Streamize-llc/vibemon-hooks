@@ -50,9 +50,9 @@ def _vibemon_dir():
 
 def _read_text(path, default=""):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read().strip()
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeDecodeError):
         return default
 
 
@@ -64,7 +64,7 @@ def _read_config():
     if not os.path.exists(p):
         return cfg
     try:
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             for raw in f:
                 line = raw.strip()
                 if not line or line.startswith("#"):
@@ -72,7 +72,7 @@ def _read_config():
                 if "=" in line:
                     k, v = line.split("=", 1)
                     cfg[k.strip()] = v.strip()
-    except (OSError, IOError):
+    except (OSError, IOError, UnicodeDecodeError):
         pass
     return cfg
 
@@ -137,7 +137,7 @@ def _auto_update_once():
             except ValueError:
                 pass
         try:
-            with open(last_path, "w") as f:
+            with open(last_path, "w", encoding="utf-8") as f:
                 f.write(str(now))
         except (OSError, IOError):
             pass

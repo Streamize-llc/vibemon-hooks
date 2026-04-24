@@ -51,7 +51,7 @@ WINDOWS_BUNDLE_FILES = [
 
 
 def read(name):
-    with open(os.path.join(SRC, name)) as f:
+    with open(os.path.join(SRC, name), encoding="utf-8") as f:
         return f.read()
 
 
@@ -77,7 +77,7 @@ def substitute(template, providers):
 def _read_version():
     if not os.path.exists(VERSION_FILE):
         return ""
-    with open(VERSION_FILE) as f:
+    with open(VERSION_FILE, encoding="utf-8") as f:
         return f.read().strip()
 
 
@@ -161,14 +161,14 @@ def build_install_ps1():
 # ─── Driver ───────────────────────────────────────────────────────────
 def _write_artifact(path, content, mode=0o755):
     os.makedirs(DIST, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
     try:
         os.chmod(path, mode)
     except OSError:
         pass
     sha = hashlib.sha256(content.encode()).hexdigest()
-    with open(path + ".sha256", "w") as f:
+    with open(path + ".sha256", "w", encoding="utf-8", newline="\n") as f:
         f.write(f"{sha}  {os.path.basename(path)}\n")
     return sha
 
@@ -177,7 +177,7 @@ def _check_artifact(path, content):
     if not os.path.exists(path):
         print(f"{path} missing — run `python3 scripts/build.py`", file=sys.stderr)
         return False
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         current = f.read()
     if current != content:
         cur_sha = hashlib.sha256(current.encode()).hexdigest()[:12]

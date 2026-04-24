@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="16"
+VIBEMON_VERSION="17"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -778,7 +778,7 @@ def build_envelope(event, payload, agent, cwd, timestamp, project_root=""):
 # ─── Script entry point (called by notify.sh) ──────────────────────────
 def _read_stdin_json(file_path):
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             raw = f.read()
         return json.loads(raw) if raw.strip() else {}
     except Exception:
@@ -883,7 +883,7 @@ class FileLock:
 
     def __enter__(self):
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-        self.fh = open(self.path, "w")
+        self.fh = open(self.path, "w", encoding="utf-8")
         if IS_WINDOWS:
             import msvcrt
             # LK_LOCK = blocking exclusive on a single byte at offset 0.
@@ -1008,7 +1008,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
     with FileLock(settings_path):
         settings = {}
         if os.path.exists(settings_path):
-            with open(settings_path, "r") as f:
+            with open(settings_path, "r", encoding="utf-8") as f:
                 try:
                     settings = json.load(f)
                 except json.JSONDecodeError:
@@ -1027,7 +1027,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
         dir_path = os.path.dirname(settings_path) or "."
         fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".settings.", suffix=".tmp")
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
                 f.write("\n")
             os.replace(tmp_path, settings_path)
@@ -1087,7 +1087,7 @@ class FileLock:
 
     def __enter__(self):
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-        self.fh = open(self.path, "w")
+        self.fh = open(self.path, "w", encoding="utf-8")
         if IS_WINDOWS:
             import msvcrt
             # LK_LOCK = blocking exclusive on a single byte at offset 0.
@@ -1198,7 +1198,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
     with FileLock(settings_path):
         settings = {}
         if os.path.exists(settings_path):
-            with open(settings_path, "r") as f:
+            with open(settings_path, "r", encoding="utf-8") as f:
                 try:
                     settings = json.load(f)
                 except json.JSONDecodeError:
@@ -1215,7 +1215,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
         dir_path = os.path.dirname(settings_path) or "."
         fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".settings.", suffix=".tmp")
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
                 f.write("\n")
             os.replace(tmp_path, settings_path)
@@ -1281,7 +1281,7 @@ def merge(hooks_path, notify_prefix=None, hooks_def=None):
     os.makedirs(os.path.dirname(hooks_path) or ".", exist_ok=True)
     config = {}
     if os.path.exists(hooks_path):
-        with open(hooks_path, "r") as f:
+        with open(hooks_path, "r", encoding="utf-8") as f:
             try:
                 config = json.load(f)
             except json.JSONDecodeError:
@@ -1295,7 +1295,7 @@ def merge(hooks_path, notify_prefix=None, hooks_def=None):
         hooks[event_name] = existing
     config["hooks"] = hooks
 
-    with open(hooks_path, "w") as f:
+    with open(hooks_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
@@ -1354,7 +1354,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
     os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
     settings = {}
     if os.path.exists(settings_path):
-        with open(settings_path, "r") as f:
+        with open(settings_path, "r", encoding="utf-8") as f:
             try:
                 settings = json.load(f)
             except json.JSONDecodeError:
@@ -1368,7 +1368,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
         hooks[event_name] = existing
     settings["hooks"] = hooks
 
-    with open(settings_path, "w") as f:
+    with open(settings_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2, ensure_ascii=False)
         f.write("\n")
 

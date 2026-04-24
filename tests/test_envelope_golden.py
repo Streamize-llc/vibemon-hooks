@@ -47,7 +47,7 @@ def test_envelope_matches_golden(fixture_name, fixtures_dir, golden_dir):
             f"Run `python3 scripts/regen_golden.py` to generate."
         )
 
-    with open(fixture_path) as f:
+    with open(fixture_path, encoding="utf-8") as f:
         raw = json.load(f)
     event = raw.pop("event_type", "unknown")
     raw.pop("_meta_only_for_test", None)
@@ -61,7 +61,7 @@ def test_envelope_matches_golden(fixture_name, fixtures_dir, golden_dir):
         project_root="user/repo",
     ))
 
-    with open(golden_path) as f:
+    with open(golden_path, encoding="utf-8") as f:
         expected = json.load(f)
 
     # Sort by serializing → loading so dict order doesn't matter

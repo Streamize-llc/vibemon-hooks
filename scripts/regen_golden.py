@@ -31,7 +31,7 @@ def normalize(env):
 
 
 def regen_one(fixture_path):
-    with open(fixture_path) as f:
+    with open(fixture_path, encoding="utf-8") as f:
         raw = json.load(f)
     event = raw.pop("event_type", "unknown")
     raw.pop("_meta_only_for_test", None)
@@ -57,7 +57,7 @@ def main():
         fixture = os.path.join(FIXTURES, name)
         gold = os.path.join(GOLDEN, name)
         env = regen_one(fixture)
-        with open(gold, "w") as f:
+        with open(gold, "w", encoding="utf-8", newline="\n") as f:
             json.dump(env, f, indent=2, ensure_ascii=False, sort_keys=True)
             f.write("\n")
         print(f"  wrote {gold}")

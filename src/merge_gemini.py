@@ -84,7 +84,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
     with FileLock(settings_path):
         settings = {}
         if os.path.exists(settings_path):
-            with open(settings_path, "r") as f:
+            with open(settings_path, "r", encoding="utf-8") as f:
                 try:
                     settings = json.load(f)
                 except json.JSONDecodeError:
@@ -101,7 +101,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
         dir_path = os.path.dirname(settings_path) or "."
         fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".settings.", suffix=".tmp")
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
                 f.write("\n")
             os.replace(tmp_path, settings_path)

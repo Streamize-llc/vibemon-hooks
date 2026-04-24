@@ -34,7 +34,7 @@ def pytest_generate_tests(metafunc):
 
 
 def test_canary_never_appears_in_envelope(canary_path):
-    with open(canary_path) as f:
+    with open(canary_path, encoding="utf-8") as f:
         raw = json.load(f)
 
     # Verify the fixture itself contains a canary (sanity)

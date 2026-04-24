@@ -23,7 +23,7 @@ def test_filelock_serializes_concurrent_writers():
     with tempfile.TemporaryDirectory() as d:
         target = os.path.join(d, "settings.json")
         counter_path = os.path.join(d, "counter")
-        with open(counter_path, "w") as f:
+        with open(counter_path, "w", encoding="utf-8") as f:
             f.write("0")
 
         N = 100
@@ -32,12 +32,12 @@ def test_filelock_serializes_concurrent_writers():
         def worker():
             for _ in range(ITERS_PER_THREAD):
                 with FileLock(target):
-                    with open(counter_path) as f:
+                    with open(counter_path, encoding="utf-8") as f:
                         v = int(f.read())
                     # Tiny sleep widens the race window — ensures the test
                     # would fail without the lock.
                     time.sleep(0.0001)
-                    with open(counter_path, "w") as f:
+                    with open(counter_path, "w", encoding="utf-8") as f:
                         f.write(str(v + 1))
 
         t1 = threading.Thread(target=worker)

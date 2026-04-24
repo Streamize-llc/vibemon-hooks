@@ -34,7 +34,7 @@ class FileLock:
 
     def __enter__(self):
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-        self.fh = open(self.path, "w")
+        self.fh = open(self.path, "w", encoding="utf-8")
         if IS_WINDOWS:
             import msvcrt
             # LK_LOCK = blocking exclusive on a single byte at offset 0.

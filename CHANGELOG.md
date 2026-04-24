@@ -1,5 +1,31 @@
 # Changelog
 
+## v17 — 2026-04-24
+
+Hot-fix follow-up to v16 — explicit `encoding="utf-8"` on every text
+`open()` call so build/install/notify work on Windows where the default
+codec is cp1252.
+
+### Why
+v16's CI matrix added `windows-latest` and immediately failed:
+`UnicodeDecodeError: 'charmap' codec can't decode byte 0x9d` while
+reading `src/install.sh` (contains `🐾`, `→`, `…`). Same bug would
+have hit Windows users running `notify.py` against any settings.json
+or config file containing non-ASCII bytes (Korean prompts, em dashes).
+
+### What changed
+- `scripts/build.py`, `scripts/regen_golden.py`: read sources with
+  `encoding="utf-8"`, write artifacts with `encoding="utf-8", newline="\n"`
+  (locks dist file bytes regardless of OS).
+- `src/notify.py`, `src/install.py`, `src/extract.py`, `src/lock.py`,
+  `src/merge_*.py`: all `open()` and `os.fdopen()` text-mode calls now
+  pass `encoding="utf-8"` explicitly.
+- Tests: same fix for fixture/golden/canary loads.
+
+No behavior change on macOS / Linux — UTF-8 is already the default
+codec there. Hash of `dist/install.sh` differs from v16 only because
+of the VERSION token.
+
 ## v16 — 2026-04-24
 
 Windows native installer (`install.ps1`) — Unix path unchanged.

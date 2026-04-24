@@ -329,7 +329,7 @@ def build_envelope(event, payload, agent, cwd, timestamp, project_root=""):
 # ─── Script entry point (called by notify.sh) ──────────────────────────
 def _read_stdin_json(file_path):
     try:
-        with open(file_path) as f:
+        with open(file_path, encoding="utf-8") as f:
             raw = f.read()
         return json.loads(raw) if raw.strip() else {}
     except Exception:

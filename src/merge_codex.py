@@ -37,7 +37,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
     os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
     settings = {}
     if os.path.exists(settings_path):
-        with open(settings_path, "r") as f:
+        with open(settings_path, "r", encoding="utf-8") as f:
             try:
                 settings = json.load(f)
             except json.JSONDecodeError:
@@ -51,7 +51,7 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
         hooks[event_name] = existing
     settings["hooks"] = hooks
 
-    with open(settings_path, "w") as f:
+    with open(settings_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2, ensure_ascii=False)
         f.write("\n")
 

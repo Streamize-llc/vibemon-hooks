@@ -35,7 +35,7 @@ from merge_codex import merge as merge_codex  # noqa: E402
 
 def _write_text(path, content, mode=0o644):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(content)
     try:
         os.chmod(path, mode)

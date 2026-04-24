@@ -12,7 +12,7 @@ from merge_codex import merge as merge_codex
 
 
 def _read(p):
-    with open(p) as f:
+    with open(p, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -55,7 +55,7 @@ def test_claude_merge_preserves_user_hooks():
                 ],
             }
         }
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(user_settings, f)
 
         merge_claude(path)
@@ -91,7 +91,7 @@ def test_claude_merge_replaces_old_vibemon_entries():
                 ]
             }
         }
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(old_settings, f)
 
         merge_claude(path)
@@ -135,7 +135,7 @@ def test_corrupt_settings_treated_as_empty():
     """If settings.json is malformed JSON, mergers should overwrite, not crash."""
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "settings.json")
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write("{ this is not json")
         merge_claude(path)
         # Should not throw; result should be valid

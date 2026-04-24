@@ -32,7 +32,7 @@ def _extract_heredoc(src, marker):
 
 
 def _bash_check(content):
-    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as tf:
+    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, encoding="utf-8") as tf:
         tf.write(content.replace("__SUPABASE_URL__", "https://x.supabase.co"))
         path = tf.name
     try:
@@ -43,7 +43,7 @@ def _bash_check(content):
 
 
 def _py_check(content):
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as tf:
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as tf:
         tf.write(content)
         path = tf.name
     try:
@@ -65,9 +65,10 @@ def test_dist_install_sh_exists(dist_dir):
 
 def test_dist_install_sh_bash_syntax(dist_dir):
     p = os.path.join(dist_dir, "install.sh")
-    src = open(p).read()
+    with open(p, encoding="utf-8") as f:
+        src = f.read()
     src = src.replace("__SUPABASE_URL__", "https://x.supabase.co")
-    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as tf:
+    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, encoding="utf-8") as tf:
         tf.write(src); path = tf.name
     try:
         r = subprocess.run(["bash", "-n", path], capture_output=True, text=True)
@@ -78,7 +79,8 @@ def test_dist_install_sh_bash_syntax(dist_dir):
 
 @pytest.mark.parametrize("marker,kind", HEREDOCS)
 def test_embedded_heredoc_syntax(marker, kind, dist_dir):
-    src = open(os.path.join(dist_dir, "install.sh")).read()
+    with open(os.path.join(dist_dir, "install.sh"), encoding="utf-8") as f:
+        src = f.read()
     body = _extract_heredoc(src, marker)
     assert body is not None, f"heredoc {marker} not found in dist/install.sh"
 
