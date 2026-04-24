@@ -63,6 +63,10 @@ def test_dist_install_sh_exists(dist_dir):
     )
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="dist/install.sh is a Unix artifact; windows-latest 'bash' resolves to the WSL stub",
+)
 def test_dist_install_sh_bash_syntax(dist_dir):
     p = os.path.join(dist_dir, "install.sh")
     with open(p, encoding="utf-8") as f:
@@ -79,6 +83,8 @@ def test_dist_install_sh_bash_syntax(dist_dir):
 
 @pytest.mark.parametrize("marker,kind", HEREDOCS)
 def test_embedded_heredoc_syntax(marker, kind, dist_dir):
+    if kind == "shell" and os.name == "nt":
+        pytest.skip("bash heredoc check requires real bash (skipped on Windows)")
     with open(os.path.join(dist_dir, "install.sh"), encoding="utf-8") as f:
         src = f.read()
     body = _extract_heredoc(src, marker)

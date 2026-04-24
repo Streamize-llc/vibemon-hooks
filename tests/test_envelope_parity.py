@@ -64,8 +64,16 @@ def pytest_generate_tests(metafunc):
         metafunc.parametrize("fixture_name", _list_fixtures(fixtures_dir))
 
 
-def _capture_notify_py_envelope(fixture_path, event, monkeypatch):
-    """Drive notify._fire() and capture the body it would POST."""
+def _build_both(fixture_path, event, monkeypatch):
+    """Run both pipelines under the SAME chdir context and return
+    (notify_py_envelope, expected_envelope). Using one shared cwd
+    avoids platform drift (e.g. os.chdir('/') resolves to D:\\ on
+    Windows but / on POSIX)."""
+    with open(fixture_path, encoding="utf-8") as f:
+        raw = json.load(f)
+    raw.pop("event_type", None)
+    raw.pop("_meta_only_for_test", None)
+
     captured = {}
 
     def fake_spawn(body, api_key, version):
@@ -73,6 +81,7 @@ def _capture_notify_py_envelope(fixture_path, event, monkeypatch):
         captured["api_key"] = api_key
         captured["version"] = version
 
+    original_cwd = os.getcwd()
     with tempfile.TemporaryDirectory() as d:
         vd = os.path.join(d, ".vibemon")
         os.makedirs(vd)
@@ -86,48 +95,38 @@ def _capture_notify_py_envelope(fixture_path, event, monkeypatch):
         monkeypatch.setattr(notify, "_utc_iso", lambda: "<redacted>")
         monkeypatch.setattr(notify, "_spawn_post", fake_spawn)
 
-        with open(fixture_path, encoding="utf-8") as f:
-            raw = json.load(f)
-        # Strip the test-only event_type indicator the fixtures use
-        raw.pop("event_type", None)
-        raw.pop("_meta_only_for_test", None)
-
-        # Force cwd to a deterministic value so envelope.cwd matches expected
-        original_cwd = os.getcwd()
         try:
-            os.chdir("/")
+            os.chdir(d)
+            shared_cwd = os.getcwd()  # canonical for whatever OS we're on
+
+            # notify.py path
             rc = notify._fire(event, "claude_code", raw)
+            assert rc == 0
+            assert "body" in captured, "notify._fire did not invoke _spawn_post"
+            notify_envelope = json.loads(captured["body"])
+
+            # Direct build_envelope (what notify.sh's extract.main does)
+            expected_envelope = build_envelope(
+                event=event,
+                payload=raw,
+                agent="claude_code",
+                cwd=shared_cwd,
+                timestamp="<redacted>",
+                project_root="user/repo",
+            )
         finally:
             os.chdir(original_cwd)
 
-        assert rc == 0
-        assert "body" in captured, "notify._fire did not invoke _spawn_post"
-        return json.loads(captured["body"])
-
-
-def _expected_envelope_via_extract(fixture_path, event):
-    """Same shape as notify.sh's extract.main() pipeline — direct
-    build_envelope() with the same controlled inputs."""
-    with open(fixture_path, encoding="utf-8") as f:
-        raw = json.load(f)
-    raw.pop("event_type", None)
-    raw.pop("_meta_only_for_test", None)
-    return build_envelope(
-        event=event,
-        payload=raw,
-        agent="claude_code",
-        cwd="/",
-        timestamp="<redacted>",
-        project_root="user/repo",
-    )
+    return notify_envelope, expected_envelope
 
 
 def test_envelope_parity(fixture_name, fixtures_dir, monkeypatch):
     fixture_path = os.path.join(fixtures_dir, fixture_name)
     event = _fixture_event(fixture_name)
 
-    actual = _normalize(_capture_notify_py_envelope(fixture_path, event, monkeypatch))
-    expected = _normalize(_expected_envelope_via_extract(fixture_path, event))
+    notify_env, expected_env = _build_both(fixture_path, event, monkeypatch)
+    actual = _normalize(notify_env)
+    expected = _normalize(expected_env)
 
     a = json.loads(json.dumps(actual, sort_keys=True))
     e = json.loads(json.dumps(expected, sort_keys=True))
@@ -148,26 +147,30 @@ def test_envelope_parity_against_subprocess_extract(fixtures_dir, monkeypatch):
     fixture_path = os.path.join(fixtures_dir, "activity_edit.json")
     event = "activity"
 
+    notify_env, _ = _build_both(fixture_path, event, monkeypatch)
+    py_envelope = _normalize(notify_env)
+
+    # extract.py reads VIBEMON_CWD from env, no chdir needed. Use whatever
+    # cwd python's _build_both ran under so both pipelines see the same value.
     sub_env = os.environ.copy()
     sub_env.update({
         "VIBEMON_EVT": event,
         "VIBEMON_AGENT": "claude_code",
-        "VIBEMON_CWD": "/",
+        "VIBEMON_CWD": py_envelope.get("cwd", os.getcwd()),
         "VIBEMON_ROOT": "user/repo",
         "VIBEMON_TS": "<redacted>",
         "VIBEMON_FILE": fixture_path,
+        "PYTHONIOENCODING": "utf-8",
     })
     src_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"
     )
     r = subprocess.run(
         [sys.executable, os.path.join(src_dir, "extract.py")],
-        env=sub_env, capture_output=True, text=True,
+        env=sub_env, capture_output=True, text=True, encoding="utf-8",
     )
     assert r.returncode == 0, f"extract.py failed: {r.stderr}"
     sh_envelope = _normalize(json.loads(r.stdout))
-
-    py_envelope = _normalize(_capture_notify_py_envelope(fixture_path, event, monkeypatch))
 
     a = json.loads(json.dumps(sh_envelope, sort_keys=True))
     b = json.loads(json.dumps(py_envelope, sort_keys=True))
