@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="17"
+VIBEMON_VERSION="18"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -226,10 +226,57 @@ Pure function — takes a shell command string, returns a category like
 command body. Safe to embed in notify.sh and to import for unit tests.
 """
 
+import re
 import shlex
 
 
 COMMIT_MSG_MAX = 200
+HEAD_MAX = 32
+
+# `KEY=VAL` env-var assignment prefix as recognised by the shell.
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# Matches `$(cat <<[-]DELIM ... DELIM)` command substitution used by Claude Code
+# et al. to pass multi-line commit messages via HEREDOC. Captures the DELIM in
+# group(1) and the body (between the opening and closing DELIM lines) in group(2).
+# Supports single/double-quoted delimiters and the `<<-` indented variant.
+_HEREDOC_RE = re.compile(
+    r"""\$\(\s*cat\s+          # $(cat
+        <<-?\s*                # <<  or  <<-
+        ['"]?(\w+)['"]?        # DELIM  (optionally quoted)
+        \s*\n                  # newline after opener
+        (.*?)                  # body (lazy)
+        \n\s*\1\b              # closing DELIM on its own line (tab-trim allowed for <<-)
+    """,
+    re.DOTALL | re.VERBOSE,
+)
+
+
+def _first_nonempty_line(body, cap=COMMIT_MSG_MAX):
+    """Return the first stripped non-empty line of `body`, capped."""
+    if not body:
+        return ""
+    for line in body.split("\n"):
+        stripped = line.strip()
+        if stripped:
+            return stripped[:cap]
+    return ""
+
+
+def _extract_message_from_arg(msg_token):
+    """Given the literal `-m` argument as tokenized by shlex, return the
+    commit title. Handles three forms:
+      1. Plain string  `'feat: x'`                  → "feat: x"
+      2. Multi-line    `'feat: header\\n\\nbody'`   → "feat: header"
+      3. HEREDOC subst `$(cat <<'EOF'\\nfeat: x\\nEOF\\n)` → "feat: x"
+    Returns "" if nothing parseable.
+    """
+    if not msg_token:
+        return ""
+    m = _HEREDOC_RE.search(msg_token)
+    if m:
+        return _first_nonempty_line(m.group(2))
+    return _first_nonempty_line(msg_token)
 
 # When a command is a shell chain ("git add . && git commit && git push"),
 # classify every segment and prefer the most story-relevant category.
@@ -295,23 +342,29 @@ def _chain_token_segments(cmd):
 
 def _commit_message_from_tokens(tokens):
     """Scan an already-tokenized `git commit ...` invocation for its `-m`
-    argument. Returns the first line (COMMIT_MSG_MAX cap) or ""."""
-    if len(tokens) < 2 or tokens[0] != "git" or tokens[1] != "commit":
+    argument. Handles HEREDOC command substitution as used by Claude Code
+    (`-m "$(cat <<'EOF' ... EOF)"`). Returns the first non-empty line
+    (COMMIT_MSG_MAX cap) or ""."""
+    # Skip any leading env-var assignments (`GIT_COMMITTER_DATE=... git commit`).
+    start = 0
+    while start < len(tokens) and _ENV_ASSIGN_RE.match(tokens[start]):
+        start += 1
+    if len(tokens) - start < 2 or tokens[start] != "git" or tokens[start + 1] != "commit":
         return ""
-    i = 2
+    i = start + 2
     while i < len(tokens):
         t = tokens[i]
         if t == "-m" or t == "--message":
             if i + 1 < len(tokens):
-                return tokens[i + 1].split("\n", 1)[0][:COMMIT_MSG_MAX]
+                return _extract_message_from_arg(tokens[i + 1])
             return ""
         if t.startswith("--message="):
-            return t[len("--message="):].split("\n", 1)[0][:COMMIT_MSG_MAX]
+            return _extract_message_from_arg(t[len("--message="):])
         # Combined short flags like -am / -ma / -vam — if "m" is present,
         # the next token is the message.
         if t.startswith("-") and not t.startswith("--") and "m" in t[1:]:
             if i + 1 < len(tokens):
-                return tokens[i + 1].split("\n", 1)[0][:COMMIT_MSG_MAX]
+                return _extract_message_from_arg(tokens[i + 1])
             return ""
         i += 1
     return ""
@@ -332,15 +385,56 @@ def extract_commit_message(cmd):
     return ""
 
 
+def safe_command_head(cmd, maxlen=HEAD_MAX):
+    """Return the first *real* command token, skipping env-var assignments.
+
+    Prevents secret leakage when agents run commands with inline env-var
+    prefixes like `API_KEY=sk-xxx curl ...` — the naive `cmd.split()[0]`
+    would leak the first 32 chars of the secret to `bash.head`.
+
+    Transformations:
+      `KEY=VAL cmd ...`        → `cmd`
+      `KEY1=a KEY2=b cmd ...`  → `cmd`
+      `SRK='sb_secret_xxx'`    → `<env>`  (all env, no command)
+      `` (empty)               → ``
+    """
+    if not cmd or not cmd.strip():
+        return ""
+    try:
+        tokens = shlex.split(cmd, posix=True)
+    except ValueError:
+        # Unclosed quote etc. — fall back to naive split, still env-aware.
+        tokens = cmd.strip().split()
+    i = 0
+    while i < len(tokens) and _ENV_ASSIGN_RE.match(tokens[i]):
+        i += 1
+    if i >= len(tokens):
+        return "<env>"
+    return tokens[i][:maxlen]
+
+
 def _classify_single(cmd):
-    """Classify a SINGLE command (no chain) by its first two tokens."""
+    """Classify a SINGLE command (no chain) by its first two tokens.
+
+    Skips leading env-var assignments (`KEY=VAL cmd ...`) so that
+    prefixed commands classify correctly — e.g. `GIT_COMMITTER_DATE=... git commit`
+    must still be `git.commit`, not `unknown`.
+    """
     s = (cmd or "").strip()
     if not s:
         return ""
-    parts = s.split()
-    head = parts[0]
-    sub = parts[1] if len(parts) > 1 else ""
-    sub2 = parts[2] if len(parts) > 2 else ""
+    try:
+        parts = shlex.split(s, posix=True)
+    except ValueError:
+        parts = s.split()
+    i = 0
+    while i < len(parts) and _ENV_ASSIGN_RE.match(parts[i]):
+        i += 1
+    if i >= len(parts):
+        return ""  # all env-var assignments, no actual command to classify
+    head = parts[i]
+    sub = parts[i + 1] if i + 1 < len(parts) else ""
+    sub2 = parts[i + 2] if i + 2 < len(parts) else ""
 
     if head == "git":
         if sub == "commit":
@@ -477,7 +571,7 @@ except Exception:
 # Embedded for build (notify.sh concatenates classify.py before this file).
 # When imported as a module, classifier helpers come from the sibling import.
 try:
-    from classify import classify_bash, extract_commit_message  # type: ignore
+    from classify import classify_bash, extract_commit_message, safe_command_head  # type: ignore
 except ImportError:
     # If running as a single concatenated script, these names are already
     # in the module's namespace — defined above by the build step.
@@ -665,9 +759,8 @@ def derive_signals(event, payload):
         cmd = ti.get("command") or ti.get("script") or ""
         if isinstance(cmd, str) and cmd:
             cat = classify_bash(cmd)
-            head = cmd.strip().split()[0] if cmd.strip() else ""
             sig["bash.category"] = cat
-            sig["bash.head"] = head[:32]
+            sig["bash.head"] = safe_command_head(cmd)
             sig["bash.byte_len"] = len(cmd)
             if cat == "git.commit" and os.environ.get("VIBEMON_NO_COMMIT_MSG", "") != "1":
                 msg = extract_commit_message(cmd)

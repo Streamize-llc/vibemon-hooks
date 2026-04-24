@@ -28,7 +28,7 @@ except Exception:
 # Embedded for build (notify.sh concatenates classify.py before this file).
 # When imported as a module, classifier helpers come from the sibling import.
 try:
-    from classify import classify_bash, extract_commit_message  # type: ignore
+    from classify import classify_bash, extract_commit_message, safe_command_head  # type: ignore
 except ImportError:
     # If running as a single concatenated script, these names are already
     # in the module's namespace — defined above by the build step.
@@ -216,9 +216,8 @@ def derive_signals(event, payload):
         cmd = ti.get("command") or ti.get("script") or ""
         if isinstance(cmd, str) and cmd:
             cat = classify_bash(cmd)
-            head = cmd.strip().split()[0] if cmd.strip() else ""
             sig["bash.category"] = cat
-            sig["bash.head"] = head[:32]
+            sig["bash.head"] = safe_command_head(cmd)
             sig["bash.byte_len"] = len(cmd)
             if cat == "git.commit" and os.environ.get("VIBEMON_NO_COMMIT_MSG", "") != "1":
                 msg = extract_commit_message(cmd)
