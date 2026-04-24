@@ -23,10 +23,10 @@ jobs:
       - name: Install pytest
         run: pip install pytest
 
-      - name: Build dist/install.sh
+      - name: Build dist artifacts
         run: python3 scripts/build.py
 
-      - name: Verify dist/install.sh is committed and reproducible
+      - name: Verify dist artifacts are committed and reproducible
         run: python3 scripts/build.py --check
 
       - name: Run all tests
@@ -62,3 +62,72 @@ jobs:
           echo "===================="
           echo "Privacy invariants: PASSED"
           echo "===================="
+
+  test-windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Build dist artifacts
+        run: python scripts\build.py
+
+      - name: Verify dist artifacts are committed and reproducible
+        run: python scripts\build.py --check
+
+      - name: Run all tests
+        run: python -m pytest tests/ -v
+
+      - name: PowerShell AST parse on dist/install.ps1
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path "dist\install.ps1"),
+              [ref]$tokens,
+              [ref]$errors
+          )
+          if ($errors -and $errors.Count -gt 0) {
+              foreach ($e in $errors) { Write-Error $e }
+              exit 1
+          }
+          Write-Host "ok dist\install.ps1 AST parses"
+
+      - name: Dry-install into a temp USERPROFILE
+        shell: pwsh
+        env:
+          USERPROFILE: ${{ runner.temp }}\test-home
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:USERPROFILE | Out-Null
+          # The connection probe will fail (HTTP 401 against the real
+          # Supabase URL with a dummy key, or hang briefly) — we tolerate
+          # a non-zero exit and verify the file layout instead.
+          try {
+              & .\dist\install.ps1 -ApiKey dummy_api_key 2>&1 | Tee-Object -FilePath install.log
+          } catch {}
+          Write-Host "=== install log ==="
+          Get-Content install.log -ErrorAction SilentlyContinue
+          Write-Host "=== installed files ==="
+          Get-ChildItem (Join-Path $env:USERPROFILE ".vibemon") -ErrorAction SilentlyContinue
+          if (-not (Test-Path (Join-Path $env:USERPROFILE ".vibemon\notify.py"))) {
+              throw "notify.py not installed"
+          }
+          if (-not (Test-Path (Join-Path $env:USERPROFILE ".vibemon\api-key"))) {
+              throw "api-key not saved"
+          }
+          python -c "import py_compile; py_compile.compile(r'$env:USERPROFILE\.vibemon\notify.py', doraise=True)"
+          Write-Host "ok notify.py installed and compiles"
+
+      - name: Privacy canary summary
+        run: python -m pytest tests/test_privacy_canary.py -v

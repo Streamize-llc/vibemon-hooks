@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="15"
+VIBEMON_VERSION="16"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -842,63 +842,152 @@ chmod 0755 "$VIBEMON_DIR/notify.sh"
 echo "  ✓ notify.sh installed"
 
 # ─── 5a. Merge Claude Code hooks ─────────────────────────────────────
+# lock.py is embedded above merge_claude.py so the FileLock symbol is
+# already in module scope when the merge script's `from lock import
+# FileLock` shim falls through to ImportError.
 mkdir -p "$(dirname "$CLAUDE_SETTINGS")"
 python3 - "$CLAUDE_SETTINGS" << 'PYMERGE_CLAUDE'
 """
-merge_claude.py — Idempotently merge VibeMon hooks into ~/.claude/settings.json.
+lock.py — Cross-platform exclusive file lock.
 
-Uses fcntl.flock + tempfile.mkstemp + os.replace for safety against
-concurrent install.sh runs from multiple sessions (multi-session
-invariant — see vibemon-app/CLAUDE.md).
+Wraps fcntl.flock (Unix) and msvcrt.locking (Windows) behind a single
+context manager so merge_*.py can stay platform-agnostic. Used by the
+settings.json merge code path to prevent corruption under concurrent
+install.sh / install.ps1 runs from multiple AI coding sessions.
+
+See vibemon-app/CLAUDE.md "Multi-Session Concurrency Invariants" #3.
+
+Stdlib only.
 """
 
-import fcntl
+import os
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+class FileLock:
+    """Blocking exclusive lock on a sentinel file.
+
+    Usage:
+        with FileLock(settings_path):
+            # critical section — read, modify, atomic-rename settings.json
+
+    The sentinel file (`<path>.vibemon.lock`) lives next to the protected
+    file. Lock semantics are blocking on both platforms.
+    """
+
+    def __init__(self, base_path):
+        self.path = base_path + ".vibemon.lock"
+        self.fh = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.fh = open(self.path, "w")
+        if IS_WINDOWS:
+            import msvcrt
+            # LK_LOCK = blocking exclusive on a single byte at offset 0.
+            # Retries indefinitely until acquired.
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                try:
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            else:
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.fh.close()
+            self.fh = None
+"""
+merge_claude.py — Idempotently merge VibeMon hooks into ~/.claude/settings.json.
+
+Uses an exclusive FileLock + tempfile.mkstemp + os.replace for safety
+against concurrent install.sh / install.ps1 runs from multiple AI
+coding sessions (multi-session invariant — see vibemon-app/CLAUDE.md).
+"""
+
 import json
 import os
 import sys
 import tempfile
 
+# When this file is concatenated with lock.py (via build.py's
+# # %%EMBED:lock.py%% marker inside install.sh), FileLock is already
+# in module scope and this import is a harmless no-op fallback.
+# When imported as a module (tests, install.py), src/ is on sys.path.
+try:
+    from lock import FileLock
+except ImportError:
+    pass
 
-VIBEMON_HOOKS = {
-    "PostToolUse": [
-        {
-            "matcher": "Edit|Write|NotebookEdit",
-            "hooks": [{"type": "command", "command": "bash ~/.vibemon/notify.sh activity claude_code"}],
-        },
-        {
-            "matcher": "Bash",
-            "hooks": [{"type": "command", "command": "bash ~/.vibemon/notify.sh bash claude_code"}],
-        },
-    ],
-    "UserPromptSubmit": [
-        {"hooks": [{"type": "command", "command": "bash ~/.vibemon/notify.sh prompt claude_code"}]},
-    ],
-    "Stop": [
-        {"hooks": [{"type": "command", "command": "bash ~/.vibemon/notify.sh stop claude_code"}]},
-    ],
-    "Notification": [
-        {
-            "matcher": "permission_prompt",
-            "hooks": [{"type": "command", "command": "bash ~/.vibemon/notify.sh permission claude_code"}],
-        },
-    ],
-    "SessionStart": [
-        {"hooks": [{"type": "command", "command": "bash ~/.vibemon/notify.sh session_start claude_code"}]},
-    ],
-    "SessionEnd": [
-        {"hooks": [{"type": "command", "command": "bash ~/.vibemon/notify.sh session_end claude_code"}]},
-    ],
-    "PostToolUseFailure": [
-        {
-            "matcher": "Edit|Write|NotebookEdit",
-            "hooks": [{"type": "command", "command": "bash ~/.vibemon/notify.sh tool_failure claude_code"}],
-        },
-    ],
-}
+
+# Default notify command — preserved verbatim from pre-Windows-port
+# behavior. install.sh runs merge_claude.py without arguments and gets
+# the bash invocation; install.py (Windows) passes notify_prefix to
+# substitute the Python invocation.
+DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
+
+
+def _build_hooks(notify_prefix):
+    """Construct the VIBEMON_HOOKS dict for a given notify command prefix."""
+    return {
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write|NotebookEdit",
+                "hooks": [{"type": "command", "command": "%s activity claude_code" % notify_prefix}],
+            },
+            {
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": "%s bash claude_code" % notify_prefix}],
+            },
+        ],
+        "UserPromptSubmit": [
+            {"hooks": [{"type": "command", "command": "%s prompt claude_code" % notify_prefix}]},
+        ],
+        "Stop": [
+            {"hooks": [{"type": "command", "command": "%s stop claude_code" % notify_prefix}]},
+        ],
+        "Notification": [
+            {
+                "matcher": "permission_prompt",
+                "hooks": [{"type": "command", "command": "%s permission claude_code" % notify_prefix}],
+            },
+        ],
+        "SessionStart": [
+            {"hooks": [{"type": "command", "command": "%s session_start claude_code" % notify_prefix}]},
+        ],
+        "SessionEnd": [
+            {"hooks": [{"type": "command", "command": "%s session_end claude_code" % notify_prefix}]},
+        ],
+        "PostToolUseFailure": [
+            {
+                "matcher": "Edit|Write|NotebookEdit",
+                "hooks": [{"type": "command", "command": "%s tool_failure claude_code" % notify_prefix}],
+            },
+        ],
+    }
+
+
+VIBEMON_HOOKS = _build_hooks(DEFAULT_NOTIFY_PREFIX)
 
 
 def _is_vibemon_entry(entry):
-    """Detect any vibemon hook by 'vibemon' substring in the command."""
+    """Detect any vibemon hook by 'vibemon' substring in the command.
+
+    Substring match catches both the bash form (bash ~/.vibemon/notify.sh)
+    and the Python form ("py" "...\\.vibemon\\notify.py"), so re-installs
+    cleanly replace entries from either runtime.
+    """
     for h in entry.get("hooks", []):
         cmd = h.get("command", "") if isinstance(h, dict) else h
         if "vibemon" in cmd:
@@ -906,21 +995,17 @@ def _is_vibemon_entry(entry):
     return False
 
 
-def merge(settings_path, hooks_def=None):
+def merge(settings_path, notify_prefix=None, hooks_def=None):
     """Merge VibeMon hooks into the given settings file. Idempotent.
 
-    Strips any existing vibemon entries before adding the current set,
-    so re-running upgrades cleanly. Uses an exclusive flock and atomic
-    rename to survive concurrent install runs.
+    notify_prefix overrides the default bash command (used by Windows
+    installer where bash is not present).
     """
     if hooks_def is None:
-        hooks_def = VIBEMON_HOOKS
+        hooks_def = VIBEMON_HOOKS if notify_prefix is None else _build_hooks(notify_prefix)
 
-    lock_path = settings_path + ".vibemon.lock"
     os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
-    lock_f = open(lock_path, "w")
-    fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
-    try:
+    with FileLock(settings_path):
         settings = {}
         if os.path.exists(settings_path):
             with open(settings_path, "r") as f:
@@ -952,16 +1037,14 @@ def merge(settings_path, hooks_def=None):
             except OSError:
                 pass
             raise
-    finally:
-        fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
-        lock_f.close()
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: merge_claude.py <settings_path>\n")
+        sys.stderr.write("usage: merge_claude.py <settings_path> [notify_prefix]\n")
         sys.exit(2)
-    merge(sys.argv[1])
+    prefix = sys.argv[2] if len(sys.argv) > 2 else None
+    merge(sys.argv[1], notify_prefix=prefix)
 PYMERGE_CLAUDE
 echo "  ✓ Claude Code hooks configured ($CLAUDE_SETTINGS)"
 
@@ -969,61 +1052,134 @@ echo "  ✓ Claude Code hooks configured ($CLAUDE_SETTINGS)"
 mkdir -p "$(dirname "$GEMINI_SETTINGS")"
 python3 - "$GEMINI_SETTINGS" << 'PYMERGE_GEMINI'
 """
+lock.py — Cross-platform exclusive file lock.
+
+Wraps fcntl.flock (Unix) and msvcrt.locking (Windows) behind a single
+context manager so merge_*.py can stay platform-agnostic. Used by the
+settings.json merge code path to prevent corruption under concurrent
+install.sh / install.ps1 runs from multiple AI coding sessions.
+
+See vibemon-app/CLAUDE.md "Multi-Session Concurrency Invariants" #3.
+
+Stdlib only.
+"""
+
+import os
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+class FileLock:
+    """Blocking exclusive lock on a sentinel file.
+
+    Usage:
+        with FileLock(settings_path):
+            # critical section — read, modify, atomic-rename settings.json
+
+    The sentinel file (`<path>.vibemon.lock`) lives next to the protected
+    file. Lock semantics are blocking on both platforms.
+    """
+
+    def __init__(self, base_path):
+        self.path = base_path + ".vibemon.lock"
+        self.fh = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.fh = open(self.path, "w")
+        if IS_WINDOWS:
+            import msvcrt
+            # LK_LOCK = blocking exclusive on a single byte at offset 0.
+            # Retries indefinitely until acquired.
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                try:
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            else:
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.fh.close()
+            self.fh = None
+"""
 merge_gemini.py — Idempotently merge VibeMon hooks into ~/.gemini/settings.json.
 """
 
-import fcntl
 import json
 import os
 import sys
 import tempfile
 
+# See merge_claude.py for the FileLock import shim explanation.
+try:
+    from lock import FileLock
+except ImportError:
+    pass
 
-VIBEMON_HOOKS = {
-    "AfterTool": [
-        {
-            "matcher": "write_file|replace",
-            "hooks": [{
-                "name": "vibemon-exp",
+
+DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
+
+
+def _build_hooks(notify_prefix):
+    return {
+        "AfterTool": [
+            {
+                "matcher": "write_file|replace",
+                "hooks": [{
+                    "name": "vibemon-exp",
+                    "type": "command",
+                    "command": "%s activity gemini_cli" % notify_prefix,
+                    "timeout": 5000,
+                }],
+            },
+        ],
+        "SessionStart": [
+            {"hooks": [{
+                "name": "vibemon-session-start",
                 "type": "command",
-                "command": "bash ~/.vibemon/notify.sh activity gemini_cli",
+                "command": "%s session_start gemini_cli" % notify_prefix,
                 "timeout": 5000,
-            }],
-        },
-    ],
-    "SessionStart": [
-        {"hooks": [{
-            "name": "vibemon-session-start",
-            "type": "command",
-            "command": "bash ~/.vibemon/notify.sh session_start gemini_cli",
-            "timeout": 5000,
-        }]},
-    ],
-    "SessionEnd": [
-        {"hooks": [{
-            "name": "vibemon-session-end",
-            "type": "command",
-            "command": "bash ~/.vibemon/notify.sh session_end gemini_cli",
-            "timeout": 5000,
-        }]},
-    ],
-    "BeforeAgent": [
-        {"hooks": [{
-            "name": "vibemon-prompt",
-            "type": "command",
-            "command": "bash ~/.vibemon/notify.sh prompt gemini_cli",
-            "timeout": 5000,
-        }]},
-    ],
-    "AfterAgent": [
-        {"hooks": [{
-            "name": "vibemon-stop",
-            "type": "command",
-            "command": "bash ~/.vibemon/notify.sh stop gemini_cli",
-            "timeout": 5000,
-        }]},
-    ],
-}
+            }]},
+        ],
+        "SessionEnd": [
+            {"hooks": [{
+                "name": "vibemon-session-end",
+                "type": "command",
+                "command": "%s session_end gemini_cli" % notify_prefix,
+                "timeout": 5000,
+            }]},
+        ],
+        "BeforeAgent": [
+            {"hooks": [{
+                "name": "vibemon-prompt",
+                "type": "command",
+                "command": "%s prompt gemini_cli" % notify_prefix,
+                "timeout": 5000,
+            }]},
+        ],
+        "AfterAgent": [
+            {"hooks": [{
+                "name": "vibemon-stop",
+                "type": "command",
+                "command": "%s stop gemini_cli" % notify_prefix,
+                "timeout": 5000,
+            }]},
+        ],
+    }
+
+
+VIBEMON_HOOKS = _build_hooks(DEFAULT_NOTIFY_PREFIX)
 
 
 def _is_vibemon_entry(entry):
@@ -1034,15 +1190,12 @@ def _is_vibemon_entry(entry):
     return False
 
 
-def merge(settings_path, hooks_def=None):
+def merge(settings_path, notify_prefix=None, hooks_def=None):
     if hooks_def is None:
-        hooks_def = VIBEMON_HOOKS
+        hooks_def = VIBEMON_HOOKS if notify_prefix is None else _build_hooks(notify_prefix)
 
-    lock_path = settings_path + ".vibemon.lock"
     os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
-    lock_f = open(lock_path, "w")
-    fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
-    try:
+    with FileLock(settings_path):
         settings = {}
         if os.path.exists(settings_path):
             with open(settings_path, "r") as f:
@@ -1072,16 +1225,14 @@ def merge(settings_path, hooks_def=None):
             except OSError:
                 pass
             raise
-    finally:
-        fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
-        lock_f.close()
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: merge_gemini.py <settings_path>\n")
+        sys.stderr.write("usage: merge_gemini.py <settings_path> [notify_prefix]\n")
         sys.exit(2)
-    merge(sys.argv[1])
+    prefix = sys.argv[2] if len(sys.argv) > 2 else None
+    merge(sys.argv[1], notify_prefix=prefix)
 PYMERGE_GEMINI
 echo "  ✓ Gemini CLI hooks configured ($GEMINI_SETTINGS)"
 
@@ -1102,23 +1253,30 @@ import os
 import sys
 
 
-VIBEMON_HOOKS = {
-    "afterFileEdit": [
-        {"command": "bash ~/.vibemon/notify.sh activity cursor", "timeout": 5000},
-    ],
-    "afterFileCreate": [
-        {"command": "bash ~/.vibemon/notify.sh activity cursor", "timeout": 5000},
-    ],
-}
+DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
+
+
+def _build_hooks(notify_prefix):
+    return {
+        "afterFileEdit": [
+            {"command": "%s activity cursor" % notify_prefix, "timeout": 5000},
+        ],
+        "afterFileCreate": [
+            {"command": "%s activity cursor" % notify_prefix, "timeout": 5000},
+        ],
+    }
+
+
+VIBEMON_HOOKS = _build_hooks(DEFAULT_NOTIFY_PREFIX)
 
 
 def _is_vibemon_entry(entry):
     return "vibemon" in entry.get("command", "")
 
 
-def merge(hooks_path, hooks_def=None):
+def merge(hooks_path, notify_prefix=None, hooks_def=None):
     if hooks_def is None:
-        hooks_def = VIBEMON_HOOKS
+        hooks_def = VIBEMON_HOOKS if notify_prefix is None else _build_hooks(notify_prefix)
 
     os.makedirs(os.path.dirname(hooks_path) or ".", exist_ok=True)
     config = {}
@@ -1144,9 +1302,10 @@ def merge(hooks_path, hooks_def=None):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: merge_cursor.py <hooks_path>\n")
+        sys.stderr.write("usage: merge_cursor.py <hooks_path> [notify_prefix]\n")
         sys.exit(2)
-    merge(sys.argv[1])
+    prefix = sys.argv[2] if len(sys.argv) > 2 else None
+    merge(sys.argv[1], notify_prefix=prefix)
 PYMERGE_CURSOR
   echo "  ✓ Cursor hooks configured ($CURSOR_HOOKS)"
 fi
@@ -1167,23 +1326,30 @@ import os
 import sys
 
 
-VIBEMON_HOOKS = {
-    "SessionStart": [
-        {"command": "bash ~/.vibemon/notify.sh session_start codex_cli", "timeout": 5000},
-    ],
-    "SessionEnd": [
-        {"command": "bash ~/.vibemon/notify.sh session_end codex_cli", "timeout": 5000},
-    ],
-}
+DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
+
+
+def _build_hooks(notify_prefix):
+    return {
+        "SessionStart": [
+            {"command": "%s session_start codex_cli" % notify_prefix, "timeout": 5000},
+        ],
+        "SessionEnd": [
+            {"command": "%s session_end codex_cli" % notify_prefix, "timeout": 5000},
+        ],
+    }
+
+
+VIBEMON_HOOKS = _build_hooks(DEFAULT_NOTIFY_PREFIX)
 
 
 def _is_vibemon_entry(entry):
     return "vibemon" in entry.get("command", "")
 
 
-def merge(settings_path, hooks_def=None):
+def merge(settings_path, notify_prefix=None, hooks_def=None):
     if hooks_def is None:
-        hooks_def = VIBEMON_HOOKS
+        hooks_def = VIBEMON_HOOKS if notify_prefix is None else _build_hooks(notify_prefix)
 
     os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
     settings = {}
@@ -1209,9 +1375,10 @@ def merge(settings_path, hooks_def=None):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: merge_codex.py <settings_path>\n")
+        sys.stderr.write("usage: merge_codex.py <settings_path> [notify_prefix]\n")
         sys.exit(2)
-    merge(sys.argv[1])
+    prefix = sys.argv[2] if len(sys.argv) > 2 else None
+    merge(sys.argv[1], notify_prefix=prefix)
 PYMERGE_CODEX
   echo "  ✓ Codex CLI hooks configured ($CODEX_SETTINGS)"
 fi

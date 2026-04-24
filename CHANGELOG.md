@@ -1,5 +1,75 @@
 # Changelog
 
+## v16 — 2026-04-24
+
+Windows native installer (`install.ps1`) — Unix path unchanged.
+
+### Why
+Until v15 the installer was bash-only. Native Windows users (Claude
+Code / Cursor / Codex on Windows, no WSL) had no install path — `bash`,
+`fcntl`, `disown`, and `mkdir -p ~/.vibemon` are all Unix-isms baked
+into `install.sh` and `notify.sh`. v16 ships a parallel PowerShell
+installer + Python `notify.py` runtime that produces byte-identical
+envelopes, while leaving the Unix path completely untouched.
+
+### What changed
+- **New Windows runtime** (Python stdlib only):
+  - `src/notify.py` — full port of `notify.sh`. urllib instead of curl,
+    `subprocess.Popen(start_new_session=True/DETACHED_PROCESS)` instead
+    of `& disown` for SIGHUP-immune fire-and-forget.
+  - `src/install.py` — installer runner invoked by `install.ps1`.
+  - `src/install.ps1` — PowerShell shim. Detects `py`/`python3`/`python`,
+    extracts an embedded base64 tarball into `%USERPROFILE%\.vibemon\`,
+    restricts api-key ACL via `icacls`.
+  - `src/paths.py` — single source of OS-aware paths and python launcher
+    detection.
+  - `src/lock.py` — cross-platform exclusive `FileLock` (fcntl on Unix,
+    `msvcrt.locking` on Windows). Used by `merge_*.py` for the
+    settings.json multi-session safety invariant.
+- **Unix runtime preserved**: `install.sh` and `notify.sh` are
+  unchanged in shape. `merge_*.py` were refactored to accept an
+  optional `notify_prefix` parameter (defaults to the existing
+  `bash ~/.vibemon/notify.sh` command), so the hook commands written
+  to `~/.claude/settings.json` etc. on Unix are byte-identical to v15.
+- **Build** (`scripts/build.py`):
+  - Now emits both `dist/install.sh` and `dist/install.ps1`, each with
+    a `.sha256` companion.
+  - Windows bundle is a deterministic gzipped tarball (mtime=0,
+    sorted member order, uid=gid=0) base64-encoded into the .ps1
+    template. Two consecutive builds produce identical sha256.
+- **Tests**: 68 → 94.
+  - `test_paths.py` (7) — OS-aware path helpers.
+  - `test_lock.py` (3) — `FileLock` serializes concurrent writers,
+    releases on exception.
+  - `test_envelope_parity.py` (10) — `notify.py` and `notify.sh`
+    produce JSON-equivalent envelopes for every fixture.
+  - `test_install_idempotent.py` (+6) — Windows-style `notify_prefix`
+    cases; bash↔Python re-install swap is clean (substring `vibemon`
+    match catches both forms).
+- **CI**: `windows-latest` matrix added (Python 3.10 + 3.12). PowerShell
+  AST parser validates `dist/install.ps1` syntax. Dry-install verifies
+  bundle extraction and `notify.py` py_compile.
+- **Web**: `vibemon-web/src/app/install.ps1/route.ts` — 302 redirect
+  to the GitHub Release artifact, mirror of the existing
+  `install.sh/route.ts`.
+
+### Compatibility
+- macOS / Linux users on v15 → v16 auto-update: zero behavior change.
+  The hook command strings in `settings.json` stay
+  `bash ~/.vibemon/notify.sh ...`. `notify.sh` is unchanged. The only
+  diff is `dist/install.sh` rebuilds with the new `lock.py` embedded
+  inside the merge heredocs (Linux `FileLock` wraps `fcntl.flock` —
+  same syscall, same semantics).
+- Windows native install:
+  `iwr -useb https://vibemon.dev/install.ps1 | iex; vibemon-install YOUR_API_KEY`
+- Same Supabase URL, same envelope schema, same auto-update mechanism
+  (notify.py uses the right installer per OS on session_start).
+
+### Privacy
+No new signals, no envelope shape change. Privacy canary suite still
+passes on the new Python runtime — `extract.py` and `classify.py` are
+unchanged.
+
 ## v15 — 2026-04-24
 
 Shell-chain support: agent-issued commands like `git add . && git

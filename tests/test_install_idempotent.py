@@ -141,3 +141,108 @@ def test_corrupt_settings_treated_as_empty():
         # Should not throw; result should be valid
         s = _read(path)
         assert "hooks" in s
+
+
+# ─── Windows-style notify_prefix tests ─────────────────────────────
+# install.py (PowerShell installer's runner) passes notify_prefix to
+# substitute the bash command with the Python invocation. These tests
+# pin that contract.
+
+WIN_PREFIX = '"C:\\Python312\\python.exe" "C:\\Users\\jane\\.vibemon\\notify.py"'
+
+
+def test_claude_merge_with_python_prefix_writes_python_command():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "settings.json")
+        merge_claude(path, notify_prefix=WIN_PREFIX)
+        s = _read(path)
+        cmds = [
+            h["command"]
+            for entry in s["hooks"]["PostToolUse"]
+            for h in entry["hooks"]
+        ]
+        assert all(WIN_PREFIX in c for c in cmds), (
+            f"hook commands should contain the Python prefix; got {cmds}"
+        )
+        assert not any("bash ~/.vibemon/notify.sh" in c for c in cmds), (
+            "Python-prefixed install must not leave bash commands behind"
+        )
+
+
+def test_claude_merge_python_prefix_replaces_existing_bash_entries():
+    """Re-installing with the Python prefix on a machine that previously
+    had the bash entries (e.g. WSL → native Windows migration) must
+    cleanly swap them out — substring match on 'vibemon' covers both."""
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "settings.json")
+        # First install: default (bash) prefix
+        merge_claude(path)
+        s = _read(path)
+        bash_cmds = [
+            h["command"]
+            for entry in s["hooks"]["PostToolUse"]
+            for h in entry["hooks"]
+        ]
+        assert any("bash ~/.vibemon/notify.sh" in c for c in bash_cmds)
+
+        # Re-install with Python prefix — bash entries should be gone
+        merge_claude(path, notify_prefix=WIN_PREFIX)
+        s = _read(path)
+        py_cmds = [
+            h["command"]
+            for entry in s["hooks"]["PostToolUse"]
+            for h in entry["hooks"]
+        ]
+        assert all(WIN_PREFIX in c for c in py_cmds)
+        assert not any("bash ~/.vibemon/notify.sh" in c for c in py_cmds)
+
+
+def test_gemini_merge_with_python_prefix():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "settings.json")
+        merge_gemini(path, notify_prefix=WIN_PREFIX)
+        s = _read(path)
+        cmds = []
+        for entries in s["hooks"].values():
+            for entry in entries:
+                for h in entry.get("hooks", []):
+                    cmds.append(h["command"])
+        assert cmds and all(WIN_PREFIX in c for c in cmds)
+
+
+def test_cursor_merge_with_python_prefix():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "hooks.json")
+        merge_cursor(path, notify_prefix=WIN_PREFIX)
+        s = _read(path)
+        cmds = [
+            entry["command"]
+            for entries in s["hooks"].values()
+            for entry in entries
+        ]
+        assert cmds and all(WIN_PREFIX in c for c in cmds)
+
+
+def test_codex_merge_with_python_prefix():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "settings.json")
+        merge_codex(path, notify_prefix=WIN_PREFIX)
+        s = _read(path)
+        cmds = [
+            entry["command"]
+            for entries in s["hooks"].values()
+            for entry in entries
+        ]
+        assert cmds and all(WIN_PREFIX in c for c in cmds)
+
+
+def test_python_prefix_idempotent():
+    """Two consecutive installs with the same Python prefix must yield
+    the same file (no duplicated hook entries)."""
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "settings.json")
+        merge_claude(path, notify_prefix=WIN_PREFIX)
+        first = _read(path)
+        merge_claude(path, notify_prefix=WIN_PREFIX)
+        second = _read(path)
+        assert first == second

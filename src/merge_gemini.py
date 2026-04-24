@@ -2,58 +2,70 @@
 merge_gemini.py — Idempotently merge VibeMon hooks into ~/.gemini/settings.json.
 """
 
-import fcntl
 import json
 import os
 import sys
 import tempfile
 
+# See merge_claude.py for the FileLock import shim explanation.
+try:
+    from lock import FileLock
+except ImportError:
+    pass
 
-VIBEMON_HOOKS = {
-    "AfterTool": [
-        {
-            "matcher": "write_file|replace",
-            "hooks": [{
-                "name": "vibemon-exp",
+
+DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
+
+
+def _build_hooks(notify_prefix):
+    return {
+        "AfterTool": [
+            {
+                "matcher": "write_file|replace",
+                "hooks": [{
+                    "name": "vibemon-exp",
+                    "type": "command",
+                    "command": "%s activity gemini_cli" % notify_prefix,
+                    "timeout": 5000,
+                }],
+            },
+        ],
+        "SessionStart": [
+            {"hooks": [{
+                "name": "vibemon-session-start",
                 "type": "command",
-                "command": "bash ~/.vibemon/notify.sh activity gemini_cli",
+                "command": "%s session_start gemini_cli" % notify_prefix,
                 "timeout": 5000,
-            }],
-        },
-    ],
-    "SessionStart": [
-        {"hooks": [{
-            "name": "vibemon-session-start",
-            "type": "command",
-            "command": "bash ~/.vibemon/notify.sh session_start gemini_cli",
-            "timeout": 5000,
-        }]},
-    ],
-    "SessionEnd": [
-        {"hooks": [{
-            "name": "vibemon-session-end",
-            "type": "command",
-            "command": "bash ~/.vibemon/notify.sh session_end gemini_cli",
-            "timeout": 5000,
-        }]},
-    ],
-    "BeforeAgent": [
-        {"hooks": [{
-            "name": "vibemon-prompt",
-            "type": "command",
-            "command": "bash ~/.vibemon/notify.sh prompt gemini_cli",
-            "timeout": 5000,
-        }]},
-    ],
-    "AfterAgent": [
-        {"hooks": [{
-            "name": "vibemon-stop",
-            "type": "command",
-            "command": "bash ~/.vibemon/notify.sh stop gemini_cli",
-            "timeout": 5000,
-        }]},
-    ],
-}
+            }]},
+        ],
+        "SessionEnd": [
+            {"hooks": [{
+                "name": "vibemon-session-end",
+                "type": "command",
+                "command": "%s session_end gemini_cli" % notify_prefix,
+                "timeout": 5000,
+            }]},
+        ],
+        "BeforeAgent": [
+            {"hooks": [{
+                "name": "vibemon-prompt",
+                "type": "command",
+                "command": "%s prompt gemini_cli" % notify_prefix,
+                "timeout": 5000,
+            }]},
+        ],
+        "AfterAgent": [
+            {"hooks": [{
+                "name": "vibemon-stop",
+                "type": "command",
+                "command": "%s stop gemini_cli" % notify_prefix,
+                "timeout": 5000,
+            }]},
+        ],
+    }
+
+
+VIBEMON_HOOKS = _build_hooks(DEFAULT_NOTIFY_PREFIX)
 
 
 def _is_vibemon_entry(entry):
@@ -64,15 +76,12 @@ def _is_vibemon_entry(entry):
     return False
 
 
-def merge(settings_path, hooks_def=None):
+def merge(settings_path, notify_prefix=None, hooks_def=None):
     if hooks_def is None:
-        hooks_def = VIBEMON_HOOKS
+        hooks_def = VIBEMON_HOOKS if notify_prefix is None else _build_hooks(notify_prefix)
 
-    lock_path = settings_path + ".vibemon.lock"
     os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
-    lock_f = open(lock_path, "w")
-    fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
-    try:
+    with FileLock(settings_path):
         settings = {}
         if os.path.exists(settings_path):
             with open(settings_path, "r") as f:
@@ -102,13 +111,11 @@ def merge(settings_path, hooks_def=None):
             except OSError:
                 pass
             raise
-    finally:
-        fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
-        lock_f.close()
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: merge_gemini.py <settings_path>\n")
+        sys.stderr.write("usage: merge_gemini.py <settings_path> [notify_prefix]\n")
         sys.exit(2)
-    merge(sys.argv[1])
+    prefix = sys.argv[2] if len(sys.argv) > 2 else None
+    merge(sys.argv[1], notify_prefix=prefix)

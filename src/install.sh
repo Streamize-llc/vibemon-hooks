@@ -118,8 +118,12 @@ chmod 0755 "$VIBEMON_DIR/notify.sh"
 echo "  ✓ notify.sh installed"
 
 # ─── 5a. Merge Claude Code hooks ─────────────────────────────────────
+# lock.py is embedded above merge_claude.py so the FileLock symbol is
+# already in module scope when the merge script's `from lock import
+# FileLock` shim falls through to ImportError.
 mkdir -p "$(dirname "$CLAUDE_SETTINGS")"
 python3 - "$CLAUDE_SETTINGS" << 'PYMERGE_CLAUDE'
+# %%EMBED:lock.py%%
 # %%EMBED:merge_claude.py%%
 PYMERGE_CLAUDE
 echo "  ✓ Claude Code hooks configured ($CLAUDE_SETTINGS)"
@@ -127,6 +131,7 @@ echo "  ✓ Claude Code hooks configured ($CLAUDE_SETTINGS)"
 # ─── 5b. Merge Gemini CLI hooks ──────────────────────────────────────
 mkdir -p "$(dirname "$GEMINI_SETTINGS")"
 python3 - "$GEMINI_SETTINGS" << 'PYMERGE_GEMINI'
+# %%EMBED:lock.py%%
 # %%EMBED:merge_gemini.py%%
 PYMERGE_GEMINI
 echo "  ✓ Gemini CLI hooks configured ($GEMINI_SETTINGS)"

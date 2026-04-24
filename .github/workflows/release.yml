@@ -42,10 +42,12 @@ jobs:
       - name: Compute release artifacts
         run: |
           mkdir -p release
-          cp dist/install.sh release/install.sh
+          cp dist/install.sh        release/install.sh
           cp dist/install.sh.sha256 release/install.sh.sha256
-          # Also compute sha256 inline for double-check
-          sha256sum dist/install.sh > release/sha256sum.txt
+          cp dist/install.ps1       release/install.ps1
+          cp dist/install.ps1.sha256 release/install.ps1.sha256
+          # Also compute sha256 inline for double-check (both artifacts)
+          sha256sum dist/install.sh dist/install.ps1 > release/sha256sum.txt
           cat release/sha256sum.txt
 
       - name: Create GitHub Release
@@ -54,6 +56,8 @@ jobs:
           files: |
             release/install.sh
             release/install.sh.sha256
+            release/install.ps1
+            release/install.ps1.sha256
             release/sha256sum.txt
           generate_release_notes: true
           fail_on_unmatched_files: true
