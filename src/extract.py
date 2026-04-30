@@ -265,13 +265,38 @@ def derive_signals(event, payload):
     return sig
 
 
+def _iana_tz():
+    """Best-effort IANA timezone name (e.g. 'Asia/Seoul'). Empty on failure."""
+    env = os.environ.get("TZ", "")
+    if env:
+        clean = env.lstrip(":")
+        if "/" in clean:
+            return clean
+    try:
+        link = os.readlink("/etc/localtime")
+        marker = "/zoneinfo/"
+        i = link.find(marker)
+        if i >= 0:
+            return link[i + len(marker):]
+    except (OSError, AttributeError):
+        pass
+    try:
+        with open("/etc/timezone") as f:
+            tz = f.read().strip()
+            if "/" in tz:
+                return tz
+    except (IOError, OSError):
+        pass
+    return ""
+
+
 def local_time_fields():
     """Return (local_hour, local_dow, local_tz) from system clock. Best-effort."""
     if datetime is None:
         return (None, None, "")
     try:
         now = datetime.datetime.now().astimezone()
-        return (now.hour, now.weekday(), str(now.tzinfo) if now.tzinfo else "")
+        return (now.hour, now.weekday(), _iana_tz())
     except Exception:
         return (None, None, "")
 
