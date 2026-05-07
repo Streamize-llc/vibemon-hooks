@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="19"
+VIBEMON_VERSION="20"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -587,6 +587,7 @@ SAFE_TOP_KEYS = {
     "expansion_type", "notification_type", "title", "load_reason", "memory_type",
     "trigger_file_path", "parent_file_path", "globs", "config_source", "trigger",
     "is_interrupt",
+    "duration_ms", "duration",
 }
 
 FORBIDDEN_TOP_KEYS = {
@@ -804,6 +805,20 @@ def derive_signals(event, payload):
         sig["tool.name"] = tn
     if tn == "task":
         sig["tool.is_subagent"] = True
+
+    # Tool duration — Claude Code v2.1.119+ emits `duration_ms` (PostToolUse +
+    # PostToolUseFailure). Cursor postToolUse emits `duration` (also ms).
+    # Gemini CLI / Codex CLI provide neither — mark unavailable so downstream
+    # analytics can mask "no data" instead of misreading it as "instant tool".
+    if event in ("activity", "tool_failure"):
+        d_ms = payload.get("duration_ms")
+        d = payload.get("duration")
+        if isinstance(d_ms, (int, float)) and not isinstance(d_ms, bool):
+            sig["tool.duration_ms"] = int(d_ms)
+        elif isinstance(d, (int, float)) and not isinstance(d, bool):
+            sig["tool.duration_ms"] = int(d)
+        else:
+            sig["tool.duration_unavailable"] = True
 
     return sig
 

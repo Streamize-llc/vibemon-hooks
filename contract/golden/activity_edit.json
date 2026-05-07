@@ -20,6 +20,7 @@
     "lines.added": 3,
     "lines.net": 3,
     "lines.removed": 0,
+    "tool.duration_unavailable": true,
     "tool.name": "edit"
   },
   "v": 2

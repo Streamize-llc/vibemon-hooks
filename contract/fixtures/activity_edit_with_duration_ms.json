@@ -1,0 +1,11 @@
+{
+  "event_type": "activity",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/Users/x/proj/src/Card.tsx",
+    "old_string": "<Card>",
+    "new_string": "<Card variant=\"outline\">"
+  },
+  "session_id": "sess-claude-dur",
+  "duration_ms": 1250
+}

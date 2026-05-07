@@ -1,0 +1,23 @@
+{
+  "agent": "claude_code",
+  "cwd": "/Users/x/proj",
+  "event": "activity",
+  "payload": {
+    "duration_ms": 1250,
+    "project_root": "user/repo",
+    "session_id": "sess-claude-dur",
+    "tool_input": {
+      "file_path": "/Users/x/proj/src/Card.tsx"
+    },
+    "tool_name": "Edit"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-claude-dur",
+  "signals": {
+    "file.depth": 5,
+    "file.ext": "tsx",
+    "tool.duration_ms": 1250,
+    "tool.name": "edit"
+  },
+  "v": 2
+}

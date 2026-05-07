@@ -193,6 +193,103 @@ def test_derive_subagent():
     assert sig["tool.is_subagent"] is True
 
 
+# ─── tool.duration_ms — cross-agent normalization ─────────────────────
+# Claude Code v2.1.119+ emits `duration_ms`; Cursor emits `duration`
+# (also ms). Gemini CLI and Codex CLI provide neither — we mark
+# `tool.duration_unavailable: True` so downstream cannot mistake "no
+# data" for "instant tool".
+def test_derive_duration_claude_code():
+    sig = derive_signals("activity", {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/a.ts"},
+        "duration_ms": 1250,
+    })
+    assert sig["tool.duration_ms"] == 1250
+    assert "tool.duration_unavailable" not in sig
+
+
+def test_derive_duration_cursor():
+    sig = derive_signals("activity", {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/a.ts"},
+        "duration": 800,
+    })
+    assert sig["tool.duration_ms"] == 800
+    assert "tool.duration_unavailable" not in sig
+
+
+def test_derive_duration_gemini_or_codex_marks_unavailable():
+    # No duration field of any kind → unavailable flag must be set so
+    # analytics can mask Gemini/Codex events out of duration averages.
+    sig = derive_signals("activity", {
+        "tool_name": "write_file",
+        "tool_input": {"file_path": "/a.ts"},
+    })
+    assert sig.get("tool.duration_unavailable") is True
+    assert "tool.duration_ms" not in sig
+
+
+def test_derive_duration_on_failure_event():
+    # PostToolUseFailure (Claude) and postToolUseFailure (Cursor) also
+    # carry duration. Failure events must capture it identically.
+    sig = derive_signals("tool_failure", {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/a.ts"},
+        "error": "String to replace not found",
+        "duration_ms": 42,
+    })
+    assert sig["tool.duration_ms"] == 42
+    assert sig["failure.kind"] == "string_mismatch"
+
+
+def test_derive_duration_skipped_on_non_tool_events():
+    # prompt / session_start etc. have no tool concept; we shouldn't
+    # pollute their signals with a duration_unavailable flag.
+    sig = derive_signals("prompt", {"prompt": "hello"})
+    assert "tool.duration_ms" not in sig
+    assert "tool.duration_unavailable" not in sig
+
+
+def test_derive_duration_prefers_ms_when_both_present():
+    # Defense: if a payload somehow carries both keys, the more
+    # specific `duration_ms` wins — Claude semantics (excludes
+    # permission/PreToolUse time) is the cleaner metric.
+    sig = derive_signals("activity", {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/a.ts"},
+        "duration_ms": 100,
+        "duration": 999,
+    })
+    assert sig["tool.duration_ms"] == 100
+
+
+def test_derive_duration_rejects_non_numeric():
+    # A bool counts as int in Python; explicitly reject. Strings too.
+    sig = derive_signals("activity", {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/a.ts"},
+        "duration_ms": True,
+    })
+    assert "tool.duration_ms" not in sig
+    assert sig.get("tool.duration_unavailable") is True
+
+    sig2 = derive_signals("activity", {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "/a.ts"},
+        "duration": "fast",
+    })
+    assert "tool.duration_ms" not in sig2
+    assert sig2.get("tool.duration_unavailable") is True
+
+
+def test_safe_top_keys_includes_duration_keys():
+    # Sanity: SAFE_TOP_KEYS allowlist must let raw duration fields
+    # through sanitize_payload — otherwise the server's defense-in-depth
+    # extraction never sees them.
+    assert "duration_ms" in SAFE_TOP_KEYS
+    assert "duration" in SAFE_TOP_KEYS
+
+
 # ─── build_envelope (high-level) ──────────────────────────────────────
 def test_build_envelope_shape():
     env = build_envelope(

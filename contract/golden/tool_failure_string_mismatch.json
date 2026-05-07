@@ -17,6 +17,7 @@
     "failure.kind": "string_mismatch",
     "file.depth": 5,
     "file.ext": "ts",
+    "tool.duration_unavailable": true,
     "tool.name": "edit"
   },
   "v": 2
