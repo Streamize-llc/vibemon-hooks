@@ -44,10 +44,19 @@ function Invoke-VibeMonInstall {
     )
 
     # ─── Preflight: find Python 3 ────────────────────────────────────
+    # The GUI installer's bundled interpreter wins (v25): consumer
+    # machines often have NO system Python, and the daily auto-update
+    # re-runs this script there — it must keep using the bundle instead
+    # of failing the PATH probe.
     $py = $null
-    foreach ($cand in @("py", "python3", "python")) {
-        $cmd = Get-Command $cand -ErrorAction SilentlyContinue
-        if ($cmd) { $py = $cmd.Source; break }
+    $bundledPy = Join-Path $env:USERPROFILE ".vibemon\python\python.exe"
+    if (Test-Path $bundledPy) {
+        $py = $bundledPy
+    } else {
+        foreach ($cand in @("py", "python3", "python")) {
+            $cmd = Get-Command $cand -ErrorAction SilentlyContinue
+            if ($cmd) { $py = $cmd.Source; break }
+        }
     }
     if (-not $py) {
         Write-Error "Python 3 is required. Install from https://www.python.org/ and re-run."

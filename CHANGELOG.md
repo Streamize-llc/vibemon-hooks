@@ -1,5 +1,46 @@
 # Changelog
 
+## v25 — 2026-06-06
+
+Windows GUI installer (Phase 2) — embedded Python, no prerequisites.
+
+### Why
+Windows is where the real install friction lives: the PowerShell
+one-liner is alien to non-terminal users, and — the bigger cliff —
+`install.ps1` hard-requires a system Python that consumer machines
+don't have ("Install from python.org and re-run" is a funnel exit).
+macOS users of AI coding agents are overwhelmingly terminal-capable,
+so the effort goes where the need is.
+
+### What changed
+- **New `installer/windows/`** — `VibeMonSetup.exe` (Inno Setup,
+  per-user, no UAC, no uninstaller in v1). Bundles the **embeddable
+  CPython 3.12.10** (the final 3.12 binary release; sha256-pinned at
+  build time) into `~/.vibemon/python/` and runs the same `install.py`
+  the script path uses, passing `--launcher` so hook commands bake the
+  bundled interpreter's absolute path. Wizard = Welcome → API-key page
+  (vbm_ validation) → install → "restart your agent" finish. Silent /
+  scripted: `/VERYSILENT /APIKEY=vbm_…`.
+- **Auto-update coexistence (the critical invariant)**: both
+  `install.ps1` (PowerShell probe) and `paths.python_launcher()` now
+  prefer `~/.vibemon/python/python.exe` before probing PATH — without
+  this, the daily `iwr | iex` update would fail the Python preflight on
+  machines that only have the bundle, permanently stranding exe users
+  (the v23 lesson, pre-empted). `python_launcher()` also gains a
+  `sys.executable` last-resort.
+- `install.py --launcher <path>` — explicit interpreter pinning.
+- Embeddable `._pth` gets `..` appended so `~/.vibemon` is importable
+  from the bundled interpreter regardless of invocation (its sys.path
+  is frozen and does NOT auto-include the script directory).
+- `scripts/build.py --list-windows-bundle` — module list exposed as the
+  single source of truth for the installer's staging step.
+- CI: `installer-windows` job builds the exe and runs a **silent-install
+  E2E smoke** under a throwaway USERPROFILE — executes the real exe,
+  asserts the bundle + runtime files, imports the runtime on the bundled
+  interpreter, and checks the merged Claude hooks reference it.
+- Tests: +8 (`test_install_py.py`) — argv/--launcher parsing and the
+  python_launcher probe order (bundled → PATH → sys.executable).
+
 ## v24 — 2026-06-06
 
 macOS GUI installer (Phase 1) + piped-install stdin fix.

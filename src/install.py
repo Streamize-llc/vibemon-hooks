@@ -79,10 +79,16 @@ def _has(executable_name, dot_dir_name):
 
 
 def _parse_argv(argv):
-    """Positional API_KEY + version, optional --no-commit-msg / --collect-commit-msg."""
+    """Positional API_KEY + version, optional --no-commit-msg /
+    --collect-commit-msg / --launcher <python path>.
+
+    --launcher pins the interpreter baked into the hook commands — the
+    Windows GUI installer passes its bundled python.exe so hooks never
+    depend on a system Python existing."""
     api_key = None
     version = None
     flag = None
+    launcher = None
     pos = []
     i = 1
     while i < len(argv):
@@ -91,6 +97,9 @@ def _parse_argv(argv):
             flag = "1"
         elif a == "--collect-commit-msg":
             flag = "0"
+        elif a == "--launcher":
+            i += 1
+            launcher = argv[i] if i < len(argv) else None
         else:
             pos.append(a)
         i += 1
@@ -98,15 +107,18 @@ def _parse_argv(argv):
         api_key = pos[0]
     if len(pos) > 1:
         version = pos[1]
-    return api_key, version, flag
+    return api_key, version, flag, launcher
 
 
 def main(argv=None):
     argv = argv if argv is not None else sys.argv
-    api_key, version, commit_msg_flag = _parse_argv(argv)
+    api_key, version, commit_msg_flag, launcher = _parse_argv(argv)
 
     if not api_key:
-        sys.stderr.write("usage: install.py <API_KEY> <VERSION> [--no-commit-msg|--collect-commit-msg]\n")
+        sys.stderr.write(
+            "usage: install.py <API_KEY> <VERSION>"
+            " [--no-commit-msg|--collect-commit-msg] [--launcher <python>]\n"
+        )
         return 2
 
     vd = paths.vibemon_dir()
@@ -128,7 +140,7 @@ def main(argv=None):
 
     # Compute the notify command prefix once. Quoted absolute paths so
     # spaces in user names ('C:\\Users\\Jane Doe\\...') don't break.
-    notify_prefix = paths.notify_command()
+    notify_prefix = paths.notify_command(launcher)
 
     merge_claude(paths.claude_settings(), notify_prefix=notify_prefix)
     print("  ✓ Claude Code hooks configured (%s)" % paths.claude_settings())

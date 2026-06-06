@@ -194,7 +194,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true",
                         help="Exit 1 if any dist artifact is stale")
+    parser.add_argument("--list-windows-bundle", action="store_true",
+                        help="Print the Windows bundle module list and exit "
+                             "(consumed by installer/windows/build.ps1 — "
+                             "single source of truth)")
     args = parser.parse_args()
+
+    if args.list_windows_bundle:
+        print("\n".join(WINDOWS_BUNDLE_FILES))
+        return
 
     sh_built  = build_install_sh()
     ps1_built = build_install_ps1()

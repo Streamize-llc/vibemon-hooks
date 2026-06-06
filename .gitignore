@@ -25,3 +25,6 @@ build.log
 
 # macOS installer build output (built by CI per release, never committed)
 dist-installer/
+
+# Windows installer staging (built by CI per release)
+installer/windows/stage/

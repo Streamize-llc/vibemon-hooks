@@ -62,6 +62,51 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
 
+  # Windows GUI installer (Phase 2) — embedded CPython + Inno Setup.
+  # The silent-install smoke is the real E2E: it executes the built exe
+  # under a throwaway profile, which runs install.py on the bundled
+  # interpreter and merges hooks for real.
+  installer-windows:
+    runs-on: windows-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build VibeMonSetup.exe
+        shell: pwsh
+        run: ./installer/windows/build.ps1 -OutDir dist-installer
+
+      - name: Smoke — silent install under a throwaway profile
+        shell: pwsh
+        run: |
+          $fakeHome = Join-Path $env:RUNNER_TEMP "vbm_smoke_home"
+          New-Item -ItemType Directory -Force -Path $fakeHome | Out-Null
+          $env:USERPROFILE = $fakeHome
+          $p = Start-Process -FilePath "dist-installer\VibeMonSetup.exe" `
+                -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/APIKEY=vbm_ci_smoke_key" `
+                -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "setup exited $($p.ExitCode)" }
+          $vd = Join-Path $fakeHome ".vibemon"
+          foreach ($f in @("notify.py","install.py","paths.py","merge_mcp.py","python\python.exe","api-key","version")) {
+            if (-not (Test-Path (Join-Path $vd $f))) { throw "missing after install: $f" }
+          }
+          # Bundled interpreter must import the runtime (._pth carries "..")
+          & (Join-Path $vd "python\python.exe") -c "import notify, install, paths, extract, classify; import sys; print('imports OK on', sys.version)"
+          if ($LASTEXITCODE -ne 0) { throw "bundled python import smoke failed" }
+          # Hooks merged with the bundled interpreter baked in
+          $settings = Get-Content (Join-Path $fakeHome ".claude\settings.json") -Raw
+          if ($settings -notmatch "python") { throw "claude hooks missing bundled python launcher" }
+          if ($settings -notmatch "notify.py") { throw "claude hooks missing notify.py" }
+          Write-Host "silent-install E2E smoke OK (v$(Get-Content (Join-Path $vd 'version')))"
+
+      - name: Attach installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-installer/VibeMonSetup.exe
+            dist-installer/VibeMonSetup.exe.sha256
+          fail_on_unmatched_files: true
+
   # macOS GUI installer (Phase 1) — a thin shell over install.sh, built on
   # a macOS runner and attached to the same release the job above created.
   installer-macos:
