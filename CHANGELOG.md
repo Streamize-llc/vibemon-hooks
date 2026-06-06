@@ -1,5 +1,57 @@
 # Changelog
 
+## v23 — 2026-06-06
+
+Auto-update actually works now — four compounding bugs fixed.
+
+### Why
+A production machine was found stuck on v18 for six weeks with an
+orphaned `~/.vibemon/update.lock` from April. The investigation found
+the entire auto-update path was broken on BOTH OSes, in four layers:
+
+1. **The EXIT trap never released the lock (Unix root cause).**
+   `local LOCK_DIR` + a single-quoted `trap 'rmdir "$LOCK_DIR"' EXIT`
+   means the trap expands the variable when it FIRES — after the
+   function has returned and the `local` is out of scope. Every check
+   ran `rmdir ''` (a silent no-op), so the first daily check of every
+   install left the lock behind and auto-update died permanently.
+2. **No stale-lock recovery.** Once orphaned (by #1, or by a checker
+   killed mid-flight by sleep/SIGKILL), `mkdir` fails forever and every
+   future check returns immediately. No TTL, no self-heal.
+3. **notify.py ran the check in a daemon thread.** The hook process
+   exits within milliseconds (fire-and-forget by design), killing the
+   thread mid-fetch and skipping the `finally` that releases the lock —
+   invariant #5 ("a thread dies with the parent") applied to the lock
+   lifecycle too.
+4. **`iwr | iex` was a no-op.** notify.py's Windows updater pipes
+   install.ps1 into `iex` with no arguments; the script only defined
+   its functions and exited (the `if ($ApiKey)` guard never fired), so
+   Windows auto-update never installed anything even when reached.
+
+### What changed
+- `notify.sh`: `LOCK_DIR` is no longer `local` (the trap can see it);
+  stale locks older than 60 minutes are removed and re-acquired
+  (`find -mmin +60` — BSD + GNU compatible); lock contention returns 0.
+- `notify.py`: same 60-minute TTL via `os.stat` mtime; the check now
+  runs in a detached `__update_check` helper process (spawned like the
+  POST helper) with a guaranteed try/finally, replacing the daemon
+  thread.
+- `install.ps1`: piped-iex with a stored `~/.vibemon/api-key` now runs
+  the update with that key (`return`, not `exit`, so an interactive
+  caller's shell survives). Fresh machines keep the interactive
+  `vibemon-install YOUR_API_KEY` flow.
+- Tests: new `tests/test_update_lock.py` (8 tests) — Python lock
+  semantics (TTL recovery / fresh-lock respect / release), process
+  model (session_start must spawn the detached helper; `__update_check`
+  sends no envelope), and the bash function executed for real from the
+  built artifact, pinning the trap-release root cause.
+
+Already-stuck installs cannot self-heal (their old notify skips the
+check before fetching anything) — they need one manual re-install,
+after which the v23 logic keeps them current forever. An app-side
+"update available" nudge using `script_install_status` is the
+follow-up.
+
 ## v22 — 2026-06-06
 
 HEREDOC commit titles survive quote characters in the body.

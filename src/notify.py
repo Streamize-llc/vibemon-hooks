@@ -22,7 +22,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -117,13 +116,26 @@ def _detect_project_root():
 def _auto_update_once():
     """Atomic mkdir-based lock — directory creation is atomic on POSIX
     and NTFS. Identical semantics to notify.sh's `mkdir "$LOCK_DIR"`.
-    Multi-session invariant #4."""
+    Multi-session invariant #4.
+
+    Runs inside the detached __update_check helper process (see main());
+    never call from a daemon thread — the thread dies with the parent and
+    skips the finally, orphaning the lock."""
     vd = _vibemon_dir()
     lock_dir = os.path.join(vd, "update.lock")
     try:
         os.mkdir(lock_dir)
     except FileExistsError:
-        return
+        # Stale-lock recovery (v23) — same 60-minute TTL as notify.sh.
+        # A holder that died before its finally (crash / kill) must not
+        # disable auto-update forever.
+        try:
+            if time.time() - os.stat(lock_dir).st_mtime < 3600:
+                return
+            os.rmdir(lock_dir)
+            os.mkdir(lock_dir)
+        except OSError:
+            return
     except OSError:
         return
     try:
@@ -321,12 +333,27 @@ def main(argv=None):
     event = argv[1] if len(argv) > 1 else "unknown"
     agent = argv[2] if len(argv) > 2 else "claude_code"
 
+    if event == "__update_check":
+        # Internal mode — runs in the detached helper spawned below, with
+        # a normal process lifetime so the lock's try/finally is
+        # guaranteed. Never builds or sends an envelope.
+        _auto_update_once()
+        return 0
+
     if event == "session_start":
-        # Non-blocking auto-update check. The thread is daemonic so it
-        # cannot prevent process exit — but the actual install spawn is
-        # a fully detached subprocess inside _auto_update_once, so the
-        # update completes even after this process dies.
-        threading.Thread(target=_auto_update_once, daemon=True).start()
+        # Non-blocking auto-update check. Invariant #5 applies to the LOCK
+        # lifecycle too: the previous daemon thread died abruptly with the
+        # parent (hooks return within milliseconds), skipping the
+        # finally-rmdir mid-fetch and orphaning update.lock — which
+        # permanently disabled auto-update. Run the whole check in a
+        # detached process instead; it survives the parent exactly like
+        # the POST helper does.
+        try:
+            _spawn_detached(
+                [sys.executable, os.path.abspath(__file__), "__update_check"]
+            )
+        except Exception:
+            pass
 
     payload = _read_stdin_payload()
     return _fire(event, agent, payload)

@@ -142,3 +142,15 @@ function global:vibemon-install {
 if ($ApiKey) {
     exit (Invoke-VibeMonInstall -ApiKey $ApiKey -NoCommitMsg:$NoCommitMsg -CollectCommitMsg:$CollectCommitMsg)
 }
+
+# Piped via `iwr | iex` with NO key but WITH a previous install on disk:
+# this is the auto-update path — notify.py spawns exactly this command.
+# Until v23 this case only defined the functions and did nothing, so
+# Windows auto-update never actually updated. Run the update with the
+# stored key. (`return`, not `exit` — exit would kill an interactive
+# caller's shell session.)
+$vibemonExistingKey = Join-Path (Join-Path $env:USERPROFILE ".vibemon") "api-key"
+if (Test-Path $vibemonExistingKey) {
+    $null = Invoke-VibeMonInstall
+    return
+}

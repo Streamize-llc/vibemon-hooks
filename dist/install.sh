@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="22"
+VIBEMON_VERSION="23"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -168,9 +168,24 @@ fi
 # Atomic mkdir-based lock prevents concurrent updates from multiple sessions.
 if [ "$EVENT_TYPE" = "session_start" ]; then
   _vibemon_update_check() {
-    local LOCK_DIR="$VIBEMON_DIR/update.lock"
+    # NOT `local` (v23): the single-quoted EXIT trap below expands at fire
+    # time — after this function has returned, when a local would already
+    # be out of scope. With `local` the trap ran `rmdir ''` (a no-op), so
+    # the lock was NEVER released and every install's auto-update died
+    # permanently after its first daily check.
+    LOCK_DIR="$VIBEMON_DIR/update.lock"
     if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-      return
+      # Stale-lock recovery (v23): a checker killed before its cleanup trap
+      # (sleep / SIGKILL / shutdown) leaves the dir behind and would
+      # otherwise disable auto-update FOREVER — observed in production
+      # (a machine stuck on v18 for six weeks). A live check holds the
+      # lock for seconds; anything older than 60 minutes is garbage.
+      if find "$LOCK_DIR" -maxdepth 0 -mmin +60 2>/dev/null | grep -q .; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+      fi
+      # Contention (another session holds a live lock) is normal, not an
+      # error — return 0 so the failed mkdir's status doesn't propagate.
+      mkdir "$LOCK_DIR" 2>/dev/null || return 0
     fi
     trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
     local LAST_CHECK="$VIBEMON_DIR/last-update-check"
