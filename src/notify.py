@@ -257,7 +257,7 @@ def _read_stdin_payload():
         return {}
 
 
-def _fire(event, agent, payload, raw_stdin_was_text=True):
+def _fire(event, agent, payload):
     """Build envelope, POST to /hook. Returns 0 on success, 1 on test
     probe failure. For non-test events, returns 0 immediately after
     spawning the detached POST."""

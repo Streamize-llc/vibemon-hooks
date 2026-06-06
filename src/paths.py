@@ -41,6 +41,15 @@ def codex_settings():
     return os.path.join(home(), ".codex", "settings.json")
 
 
+def claude_mcp_config():
+    """Claude Code's user-scope config file — MCP servers live at its top level."""
+    return os.path.join(home(), ".claude.json")
+
+
+def cursor_mcp_config():
+    return os.path.join(home(), ".cursor", "mcp.json")
+
+
 def python_launcher():
     """Absolute path to a Python 3 interpreter usable from a hook command.
 

@@ -141,9 +141,26 @@ is wrong and the maintainers want to know — see
   hashing in the extractor. File an issue if you want this.
 - **Uninstall completely**: delete `~/.vibemon/`, remove vibemon entries
   from `~/.claude/settings.json`, `~/.gemini/settings.json`,
-  `~/.cursor/hooks.json`, `~/.codex/settings.json`. The merge scripts
-  always strip existing vibemon entries on re-install, so nothing
-  lingers if you re-install with a different setup.
+  `~/.cursor/hooks.json`, `~/.codex/settings.json`, and the
+  `mcpServers.vibemon` entries in `~/.claude.json` and
+  `~/.cursor/mcp.json`. The merge scripts always strip existing vibemon
+  entries on re-install, so nothing lingers if you re-install with a
+  different setup.
+
+---
+
+## MCP registration (v21+)
+
+The installer also registers the vibemon **MCP server** in
+`~/.claude.json` (Claude Code) and `~/.cursor/mcp.json` (Cursor). This
+writes your `vbm_*` API key into those files as an `Authorization`
+header — the same key already stored at `~/.vibemon/api-key`. The MCP
+server lets your AI agents read/write **your own** VibeMon data (team
+TODOs, team membership) over HTTPS; it adds no new telemetry from your
+machine, and the privacy model above is unchanged. If either config
+file cannot be parsed, registration is skipped and the file is left
+exactly as it was. To disconnect, remove the `mcpServers.vibemon`
+entry.
 
 ---
 

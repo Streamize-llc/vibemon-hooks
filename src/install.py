@@ -31,6 +31,7 @@ from merge_claude import merge as merge_claude  # noqa: E402
 from merge_gemini import merge as merge_gemini  # noqa: E402
 from merge_cursor import merge as merge_cursor  # noqa: E402
 from merge_codex import merge as merge_codex  # noqa: E402
+from merge_mcp import merge as merge_mcp  # noqa: E402
 
 
 def _write_text(path, content, mode=0o644):
@@ -143,6 +144,16 @@ def main(argv=None):
         merge_codex(paths.codex_settings(), notify_prefix=notify_prefix)
         print("  ✓ Codex CLI hooks configured (%s)" % paths.codex_settings())
 
+    # MCP registration (Phase 2) — mirrors install.sh section 5e. Claude Code
+    # gets the {"type":"http",…} user-scope shape; Cursor gets url+headers only.
+    if api_key.startswith("vbm_"):
+        if _has("claude", ".claude"):
+            merge_mcp(paths.claude_mcp_config(), api_key)
+            print("  ✓ MCP server 'vibemon' registered (%s)" % paths.claude_mcp_config())
+        if _has("cursor", ".cursor"):
+            merge_mcp(paths.cursor_mcp_config(), api_key, include_type=False)
+            print("  ✓ MCP server 'vibemon' registered (%s)" % paths.cursor_mcp_config())
+
     print("")
     print("🔗 Testing connection…")
     rc = notify._fire("test", "claude_code", {})
@@ -162,6 +173,9 @@ def main(argv=None):
         else:
             print("   ℹ Git commit message titles (first line, 200 chars) are collected to power")
             print("     your activity feed. Opt out anytime by editing %s" % os.path.join(vd, "config"))
+    print("")
+    print("   ℹ MCP: restart any running Claude Code / Cursor session to load the")
+    print("     'vibemon' MCP server (verify with /mcp in Claude Code).")
     return 0
 
 

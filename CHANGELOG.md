@@ -1,5 +1,100 @@
 # Changelog
 
+## v21 — 2026-06-06
+
+MCP server registration (Phase 2) + hook-merge locking parity.
+
+### Why
+The vibemon MCP server (`https://vibemon.dev/api/mcp`, Streamable HTTP)
+lets AI agents read and write team TODOs using the same `vbm_*` key the
+hooks already use. Until now the only path was a manual `claude mcp add`
+/ hand-editing `~/.cursor/mcp.json` — error-prone and never updated on
+key rotation. While wiring the installer up, the cursor and codex hook
+merges were found writing settings with a bare `open("w")` — a
+violation of the multi-session FileLock invariant that the
+claude/gemini merges already followed.
+
+### What changed
+- **New `src/merge_mcp.py`** — idempotently registers `mcpServers.vibemon`
+  in Claude Code's `~/.claude.json` (user scope,
+  `{"type": "http", url, headers}` — the same shape
+  `claude mcp add --transport http` writes) and Cursor's
+  `~/.cursor/mcp.json` (`{url, headers}` only; Cursor's docs don't define
+  a `type` for remote servers). Key rotation updates the Authorization
+  header in place; other `mcpServers` entries and all unrelated config
+  are preserved. Unparseable JSON → registration is skipped and the file
+  left untouched — these are *not* vibemon-owned files, so "treat as
+  empty and overwrite" (what the hook merges do for their own settings)
+  would destroy Claude Code's entire user state.
+- `install.sh` section 5e (Unix) **and** `install.py` (Windows) both
+  register — OS parity from day one; `merge_mcp.py` ships in the
+  Windows bundle.
+- `merge_cursor.py` / `merge_codex.py` now use the same exclusive
+  FileLock + `tempfile.mkstemp` + `os.replace` pattern as claude/gemini
+  (multi-session invariant #3); previously a direct `open("w")` could
+  truncate-race under concurrent installs.
+- Claude Code `PostToolUseFailure` gains a `Bash` matcher — failed
+  tests/builds now fire `tool_failure`. `PostToolUse` and
+  `PostToolUseFailure` are mutually exclusive (success vs failure), so
+  there is no double-count with the `bash` event.
+- Installer prints a "restart your agent session" hint (a running
+  Claude Code / Cursor doesn't reload MCP config mid-session).
+- `notify.py`: dropped the dead `raw_stdin_was_text` parameter from
+  `_fire`.
+- Tests: new `tests/test_merge_mcp.py` (idempotency, key rotation,
+  preservation of foreign state, corrupt-JSON skip, lock sentinel name);
+  `test_static.py` now *executes* every embedded `PYMERGE_*` heredoc
+  against a temp config with the exact argv `install.sh` passes —
+  py_compile can't catch a missing `lock.py` embed (runtime
+  `NameError: FileLock`), execution can.
+
+## v20 — 2026-05-07
+
+`tool.duration_ms` signal — cross-agent normalization.
+
+### What changed
+- PostToolUse `duration_ms` (Claude Code v2.1.119+) and Cursor's
+  `duration` (also ms) were silently dropped by the `SAFE_TOP_KEYS`
+  allowlist; both are now allowed and normalized into
+  `signals["tool.duration_ms"]`.
+- Gemini CLI and Codex CLI provide neither — their events carry
+  `tool.duration_unavailable: true` so analytics can distinguish
+  "no data" from "instant tool".
+- Only emitted on `activity` / `tool_failure` events; bool/string
+  values rejected. New fixtures cover both wire formats; existing
+  goldens regenerated with the unavailable flag.
+
+## v19 — 2026-04-30
+
+Fix: IANA timezone names instead of abbreviations.
+
+### What changed
+- `local_time_fields()` returned `str(tzinfo)` abbreviations ("KST",
+  "EST") — invalid for server-side `Intl.DateTimeFormat`, silently
+  falling every non-Korean user back to Asia/Seoul.
+- New `_iana_tz()` reads the `/etc/localtime` symlink (macOS/Linux),
+  `/etc/timezone` (Debian), or `$TZ` to return proper IANA names
+  ("Asia/Seoul", "America/New_York").
+
+## v18 — 2026-04-25
+
+HEREDOC commit-message parsing + env-var prefix secret mask. Two
+production-data fixes discovered by auditing `hook_events.signals`.
+
+### What changed
+- `extract_commit_message`: agents (notably Claude Code) pass commit
+  titles via a command-substitution HEREDOC; the old tokenizer stored
+  the literal heredoc opener as the title. New `_HEREDOC_RE` +
+  `_extract_message_from_arg` pull the first non-empty body line,
+  keep the 200-char cap, and support `<<-`, quoted and custom
+  delimiters.
+- `bash.head`: naive `cmd.split()[0]` leaked env-var **values** for
+  `KEY=value cmd …` prefixed commands. New `safe_command_head()` skips
+  `KEY=VAL` tokens shlex-aware and returns `<env>` when the command is
+  nothing but assignments; same skip applied in `_classify_single` and
+  `_commit_message_from_tokens`.
+- +22 pytest cases covering every HEREDOC variant seen in production.
+
 ## v17 — 2026-04-24
 
 Hot-fix follow-up to v16 — explicit `encoding="utf-8"` on every text

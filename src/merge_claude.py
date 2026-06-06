@@ -64,6 +64,15 @@ def _build_hooks(notify_prefix):
                 "matcher": "Edit|Write|NotebookEdit",
                 "hooks": [{"type": "command", "command": "%s tool_failure claude_code" % notify_prefix}],
             },
+            # Bash failures (failed tests / broken builds / deploy errors) are the
+            # most salient "tripping" moments for the slime mirror. PostToolUse and
+            # PostToolUseFailure are mutually exclusive (success vs failure), so a
+            # failed Bash fires here as tool_failure, never as event='bash' — no
+            # double-count. extract.py classifies failure.kind from the error.
+            {
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": "%s tool_failure claude_code" % notify_prefix}],
+            },
         ],
     }
 

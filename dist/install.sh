@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="20"
+VIBEMON_VERSION="21"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -1107,6 +1107,15 @@ def _build_hooks(notify_prefix):
                 "matcher": "Edit|Write|NotebookEdit",
                 "hooks": [{"type": "command", "command": "%s tool_failure claude_code" % notify_prefix}],
             },
+            # Bash failures (failed tests / broken builds / deploy errors) are the
+            # most salient "tripping" moments for the slime mirror. PostToolUse and
+            # PostToolUseFailure are mutually exclusive (success vs failure), so a
+            # failed Bash fires here as tool_failure, never as event='bash' — no
+            # double-count. extract.py classifies failure.kind from the error.
+            {
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": "%s tool_failure claude_code" % notify_prefix}],
+            },
         ],
     }
 
@@ -1375,15 +1384,89 @@ if command -v cursor &>/dev/null || [ -d "$HOME/.cursor" ]; then
   mkdir -p "$(dirname "$CURSOR_HOOKS")"
   python3 - "$CURSOR_HOOKS" << 'PYMERGE_CURSOR'
 """
+lock.py — Cross-platform exclusive file lock.
+
+Wraps fcntl.flock (Unix) and msvcrt.locking (Windows) behind a single
+context manager so merge_*.py can stay platform-agnostic. Used by the
+settings.json merge code path to prevent corruption under concurrent
+install.sh / install.ps1 runs from multiple AI coding sessions.
+
+See vibemon-app/CLAUDE.md "Multi-Session Concurrency Invariants" #3.
+
+Stdlib only.
+"""
+
+import os
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+class FileLock:
+    """Blocking exclusive lock on a sentinel file.
+
+    Usage:
+        with FileLock(settings_path):
+            # critical section — read, modify, atomic-rename settings.json
+
+    The sentinel file (`<path>.vibemon.lock`) lives next to the protected
+    file. Lock semantics are blocking on both platforms.
+    """
+
+    def __init__(self, base_path):
+        self.path = base_path + ".vibemon.lock"
+        self.fh = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.fh = open(self.path, "w", encoding="utf-8")
+        if IS_WINDOWS:
+            import msvcrt
+            # LK_LOCK = blocking exclusive on a single byte at offset 0.
+            # Retries indefinitely until acquired.
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                try:
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            else:
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.fh.close()
+            self.fh = None
+"""
 merge_cursor.py — Merge VibeMon hooks into ~/.cursor/hooks.json.
 
 Cursor's hook config is shallower than Claude/Gemini: each event maps
 directly to a list of {command, timeout} entries with no nested 'hooks' array.
+
+Uses an exclusive FileLock + tempfile.mkstemp + os.replace for safety
+against concurrent install.sh / install.ps1 runs from multiple AI
+coding sessions (multi-session invariant — see vibemon-app/CLAUDE.md).
 """
 
 import json
 import os
 import sys
+import tempfile
+
+# When this file is concatenated with lock.py (via build.py's
+# # %%EMBED:lock.py%% marker inside install.sh), FileLock is already
+# in module scope and this import is a harmless no-op fallback.
+try:
+    from lock import FileLock
+except ImportError:
+    pass
 
 
 DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
@@ -1412,25 +1495,36 @@ def merge(hooks_path, notify_prefix=None, hooks_def=None):
         hooks_def = VIBEMON_HOOKS if notify_prefix is None else _build_hooks(notify_prefix)
 
     os.makedirs(os.path.dirname(hooks_path) or ".", exist_ok=True)
-    config = {}
-    if os.path.exists(hooks_path):
-        with open(hooks_path, "r", encoding="utf-8") as f:
+    with FileLock(hooks_path):
+        config = {}
+        if os.path.exists(hooks_path):
+            with open(hooks_path, "r", encoding="utf-8") as f:
+                try:
+                    config = json.load(f)
+                except json.JSONDecodeError:
+                    config = {}
+
+        hooks = config.setdefault("hooks", {})
+        for event_name, new_entries in hooks_def.items():
+            existing = hooks.get(event_name, [])
+            existing = [e for e in existing if not _is_vibemon_entry(e)]
+            existing.extend(new_entries)
+            hooks[event_name] = existing
+        config["hooks"] = hooks
+
+        dir_path = os.path.dirname(hooks_path) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".hooks.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            os.replace(tmp_path, hooks_path)
+        except Exception:
             try:
-                config = json.load(f)
-            except json.JSONDecodeError:
-                config = {}
-
-    hooks = config.setdefault("hooks", {})
-    for event_name, new_entries in hooks_def.items():
-        existing = hooks.get(event_name, [])
-        existing = [e for e in existing if not _is_vibemon_entry(e)]
-        existing.extend(new_entries)
-        hooks[event_name] = existing
-    config["hooks"] = hooks
-
-    with open(hooks_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 if __name__ == "__main__":
@@ -1449,14 +1543,88 @@ if command -v codex &>/dev/null || [ -d "$HOME/.codex" ]; then
   mkdir -p "$(dirname "$CODEX_SETTINGS")"
   python3 - "$CODEX_SETTINGS" << 'PYMERGE_CODEX'
 """
+lock.py — Cross-platform exclusive file lock.
+
+Wraps fcntl.flock (Unix) and msvcrt.locking (Windows) behind a single
+context manager so merge_*.py can stay platform-agnostic. Used by the
+settings.json merge code path to prevent corruption under concurrent
+install.sh / install.ps1 runs from multiple AI coding sessions.
+
+See vibemon-app/CLAUDE.md "Multi-Session Concurrency Invariants" #3.
+
+Stdlib only.
+"""
+
+import os
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+class FileLock:
+    """Blocking exclusive lock on a sentinel file.
+
+    Usage:
+        with FileLock(settings_path):
+            # critical section — read, modify, atomic-rename settings.json
+
+    The sentinel file (`<path>.vibemon.lock`) lives next to the protected
+    file. Lock semantics are blocking on both platforms.
+    """
+
+    def __init__(self, base_path):
+        self.path = base_path + ".vibemon.lock"
+        self.fh = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.fh = open(self.path, "w", encoding="utf-8")
+        if IS_WINDOWS:
+            import msvcrt
+            # LK_LOCK = blocking exclusive on a single byte at offset 0.
+            # Retries indefinitely until acquired.
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                try:
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            else:
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.fh.close()
+            self.fh = None
+"""
 merge_codex.py — Merge VibeMon session hooks into ~/.codex/settings.json.
 
 Codex CLI only exposes session-level events.
+
+Uses an exclusive FileLock + tempfile.mkstemp + os.replace for safety
+against concurrent install.sh / install.ps1 runs from multiple AI
+coding sessions (multi-session invariant — see vibemon-app/CLAUDE.md).
 """
 
 import json
 import os
 import sys
+import tempfile
+
+# When this file is concatenated with lock.py (via build.py's
+# # %%EMBED:lock.py%% marker inside install.sh), FileLock is already
+# in module scope and this import is a harmless no-op fallback.
+try:
+    from lock import FileLock
+except ImportError:
+    pass
 
 
 DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
@@ -1485,25 +1653,36 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
         hooks_def = VIBEMON_HOOKS if notify_prefix is None else _build_hooks(notify_prefix)
 
     os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
-    settings = {}
-    if os.path.exists(settings_path):
-        with open(settings_path, "r", encoding="utf-8") as f:
+    with FileLock(settings_path):
+        settings = {}
+        if os.path.exists(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                try:
+                    settings = json.load(f)
+                except json.JSONDecodeError:
+                    settings = {}
+
+        hooks = settings.setdefault("hooks", {})
+        for event_name, new_entries in hooks_def.items():
+            existing = hooks.get(event_name, [])
+            existing = [e for e in existing if not _is_vibemon_entry(e)]
+            existing.extend(new_entries)
+            hooks[event_name] = existing
+        settings["hooks"] = hooks
+
+        dir_path = os.path.dirname(settings_path) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".settings.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            os.replace(tmp_path, settings_path)
+        except Exception:
             try:
-                settings = json.load(f)
-            except json.JSONDecodeError:
-                settings = {}
-
-    hooks = settings.setdefault("hooks", {})
-    for event_name, new_entries in hooks_def.items():
-        existing = hooks.get(event_name, [])
-        existing = [e for e in existing if not _is_vibemon_entry(e)]
-        existing.extend(new_entries)
-        hooks[event_name] = existing
-    settings["hooks"] = hooks
-
-    with open(settings_path, "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 if __name__ == "__main__":
@@ -1514,6 +1693,414 @@ if __name__ == "__main__":
     merge(sys.argv[1], notify_prefix=prefix)
 PYMERGE_CODEX
   echo "  ✓ Codex CLI hooks configured ($CODEX_SETTINGS)"
+fi
+
+# ─── 5e. Register VibeMon MCP server (Claude Code + Cursor) ──────────
+# Phase 2: enable AI agents to read/write TODOs via Model Context Protocol.
+# Endpoint: https://vibemon.dev/api/mcp (Streamable HTTP transport)
+CLAUDE_MCP_CONFIG="$HOME/.claude.json"
+if [ -d "$HOME/.claude" ] || command -v claude &>/dev/null; then
+  python3 - "$CLAUDE_MCP_CONFIG" "$API_KEY" << 'PYMERGE_CLAUDE_MCP'
+"""
+lock.py — Cross-platform exclusive file lock.
+
+Wraps fcntl.flock (Unix) and msvcrt.locking (Windows) behind a single
+context manager so merge_*.py can stay platform-agnostic. Used by the
+settings.json merge code path to prevent corruption under concurrent
+install.sh / install.ps1 runs from multiple AI coding sessions.
+
+See vibemon-app/CLAUDE.md "Multi-Session Concurrency Invariants" #3.
+
+Stdlib only.
+"""
+
+import os
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+class FileLock:
+    """Blocking exclusive lock on a sentinel file.
+
+    Usage:
+        with FileLock(settings_path):
+            # critical section — read, modify, atomic-rename settings.json
+
+    The sentinel file (`<path>.vibemon.lock`) lives next to the protected
+    file. Lock semantics are blocking on both platforms.
+    """
+
+    def __init__(self, base_path):
+        self.path = base_path + ".vibemon.lock"
+        self.fh = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.fh = open(self.path, "w", encoding="utf-8")
+        if IS_WINDOWS:
+            import msvcrt
+            # LK_LOCK = blocking exclusive on a single byte at offset 0.
+            # Retries indefinitely until acquired.
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                try:
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            else:
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.fh.close()
+            self.fh = None
+"""Add the VibeMon HTTP MCP server to a Claude / Cursor config JSON.
+
+Both Claude Code (~/.claude.json) and Cursor (~/.cursor/mcp.json) keep a top-level
+`mcpServers` object whose keys are MCP server names. We merge our entry idempotently:
+
+  {
+    "mcpServers": {
+      "vibemon": {
+        "type":    "http",                          # Claude Code only — see below
+        "url":     "https://vibemon.dev/api/mcp",
+        "headers": { "Authorization": "Bearer vbm_xxx" }
+      },
+      ...
+    }
+  }
+
+Usage (inside install.sh): `python3 - <target.json> <api_key> [claude|cursor]`
+
+Shape per target:
+  - claude: {"type": "http", "url", "headers"} — exactly what
+    `claude mcp add --transport http` writes to user scope.
+  - cursor: {"url", "headers"} — Cursor's docs define remote servers by `url`
+    alone (its `type` enum is for stdio), so we omit the field rather than
+    feed an undocumented value to a possibly strict parser.
+
+The script is idempotent — re-running with the same args is a no-op (apart from
+updating the Authorization header when the API key rotates). The targets are
+NOT vibemon-owned files (~/.claude.json holds all of Claude Code's user state),
+so on any parse doubt we skip registration and leave the file untouched —
+never "treat as empty and overwrite" like the hook merges do for their own
+settings files.
+"""
+
+import json
+import os
+import sys
+import tempfile
+
+# When concatenated with lock.py (via build.py's # %%EMBED:lock.py%% marker
+# inside install.sh) FileLock is already in module scope, so this import raises
+# ImportError and the `pass` keeps the embedded class. When imported as a module
+# (tests / install.py) src/ is on sys.path so the import succeeds. Mirrors
+# merge_claude/cursor/codex: a missing lock must fail loudly (NameError), never
+# silently degrade to a no-op lock that defeats the multi-session write invariant.
+try:
+    from lock import FileLock  # type: ignore
+except ImportError:
+    pass
+
+
+MCP_URL = "https://vibemon.dev/api/mcp"
+
+
+def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
+    """Insert/update the vibemon entry. Returns True if the file changed.
+
+    include_type=False writes the Cursor shape (url + headers, no "type").
+    """
+    target_dir = os.path.dirname(target_path) or "."
+    os.makedirs(target_dir, exist_ok=True)
+
+    # FileLock appends ".vibemon.lock" itself — pass the protected path,
+    # same convention as the merge_{claude,gemini,cursor,codex} callers.
+    with FileLock(target_path):
+        # Read existing
+        data = {}
+        if os.path.exists(target_path):
+            try:
+                with open(target_path, "r", encoding="utf-8") as f:
+                    raw = f.read().strip()
+                    data = json.loads(raw) if raw else {}
+            except (json.JSONDecodeError, OSError):
+                # Don't corrupt invalid JSON — surface and exit
+                print(f"  ⚠ Could not parse {target_path}; skipping MCP registration.", file=sys.stderr)
+                return False
+
+        if not isinstance(data, dict):
+            print(f"  ⚠ {target_path} is not a JSON object; skipping MCP registration.", file=sys.stderr)
+            return False
+
+        servers = data.setdefault("mcpServers", {})
+        if not isinstance(servers, dict):
+            print(f"  ⚠ mcpServers in {target_path} is not an object; skipping MCP registration.", file=sys.stderr)
+            return False
+
+        existing = servers.get("vibemon")
+        desired = {
+            "url": MCP_URL,
+            "headers": {"Authorization": f"Bearer {api_key}"},
+        }
+        if include_type:
+            desired = {"type": "http", **desired}
+
+        if existing == desired:
+            return False  # already up to date
+
+        servers["vibemon"] = desired
+
+        # Atomic write — temp file in same dir then os.replace
+        fd, tmp = tempfile.mkstemp(dir=target_dir, prefix=".vibemon.", suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            os.replace(tmp, target_path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    return True
+
+
+def main() -> int:
+    if len(sys.argv) < 3:
+        print("usage: merge_mcp.py <target_path> <api_key> [claude|cursor]", file=sys.stderr)
+        return 2
+    target_path = sys.argv[1]
+    api_key = sys.argv[2]
+    kind = sys.argv[3] if len(sys.argv) > 3 else "claude"
+    if not api_key.startswith("vbm_"):
+        print("  ⚠ API key does not start with 'vbm_'; skipping MCP registration.", file=sys.stderr)
+        return 0
+    changed = merge(target_path, api_key, include_type=(kind != "cursor"))
+    if changed:
+        print(f"  ✓ MCP server 'vibemon' registered in {target_path}")
+    else:
+        print(f"  · MCP server already up-to-date in {target_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+PYMERGE_CLAUDE_MCP
+fi
+
+# Cursor gets the docs-exact remote-server shape (url + headers, no "type").
+CURSOR_MCP_CONFIG="$HOME/.cursor/mcp.json"
+if command -v cursor &>/dev/null || [ -d "$HOME/.cursor" ]; then
+  python3 - "$CURSOR_MCP_CONFIG" "$API_KEY" cursor << 'PYMERGE_CURSOR_MCP'
+"""
+lock.py — Cross-platform exclusive file lock.
+
+Wraps fcntl.flock (Unix) and msvcrt.locking (Windows) behind a single
+context manager so merge_*.py can stay platform-agnostic. Used by the
+settings.json merge code path to prevent corruption under concurrent
+install.sh / install.ps1 runs from multiple AI coding sessions.
+
+See vibemon-app/CLAUDE.md "Multi-Session Concurrency Invariants" #3.
+
+Stdlib only.
+"""
+
+import os
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+class FileLock:
+    """Blocking exclusive lock on a sentinel file.
+
+    Usage:
+        with FileLock(settings_path):
+            # critical section — read, modify, atomic-rename settings.json
+
+    The sentinel file (`<path>.vibemon.lock`) lives next to the protected
+    file. Lock semantics are blocking on both platforms.
+    """
+
+    def __init__(self, base_path):
+        self.path = base_path + ".vibemon.lock"
+        self.fh = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.fh = open(self.path, "w", encoding="utf-8")
+        if IS_WINDOWS:
+            import msvcrt
+            # LK_LOCK = blocking exclusive on a single byte at offset 0.
+            # Retries indefinitely until acquired.
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                try:
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            else:
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.fh.close()
+            self.fh = None
+"""Add the VibeMon HTTP MCP server to a Claude / Cursor config JSON.
+
+Both Claude Code (~/.claude.json) and Cursor (~/.cursor/mcp.json) keep a top-level
+`mcpServers` object whose keys are MCP server names. We merge our entry idempotently:
+
+  {
+    "mcpServers": {
+      "vibemon": {
+        "type":    "http",                          # Claude Code only — see below
+        "url":     "https://vibemon.dev/api/mcp",
+        "headers": { "Authorization": "Bearer vbm_xxx" }
+      },
+      ...
+    }
+  }
+
+Usage (inside install.sh): `python3 - <target.json> <api_key> [claude|cursor]`
+
+Shape per target:
+  - claude: {"type": "http", "url", "headers"} — exactly what
+    `claude mcp add --transport http` writes to user scope.
+  - cursor: {"url", "headers"} — Cursor's docs define remote servers by `url`
+    alone (its `type` enum is for stdio), so we omit the field rather than
+    feed an undocumented value to a possibly strict parser.
+
+The script is idempotent — re-running with the same args is a no-op (apart from
+updating the Authorization header when the API key rotates). The targets are
+NOT vibemon-owned files (~/.claude.json holds all of Claude Code's user state),
+so on any parse doubt we skip registration and leave the file untouched —
+never "treat as empty and overwrite" like the hook merges do for their own
+settings files.
+"""
+
+import json
+import os
+import sys
+import tempfile
+
+# When concatenated with lock.py (via build.py's # %%EMBED:lock.py%% marker
+# inside install.sh) FileLock is already in module scope, so this import raises
+# ImportError and the `pass` keeps the embedded class. When imported as a module
+# (tests / install.py) src/ is on sys.path so the import succeeds. Mirrors
+# merge_claude/cursor/codex: a missing lock must fail loudly (NameError), never
+# silently degrade to a no-op lock that defeats the multi-session write invariant.
+try:
+    from lock import FileLock  # type: ignore
+except ImportError:
+    pass
+
+
+MCP_URL = "https://vibemon.dev/api/mcp"
+
+
+def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
+    """Insert/update the vibemon entry. Returns True if the file changed.
+
+    include_type=False writes the Cursor shape (url + headers, no "type").
+    """
+    target_dir = os.path.dirname(target_path) or "."
+    os.makedirs(target_dir, exist_ok=True)
+
+    # FileLock appends ".vibemon.lock" itself — pass the protected path,
+    # same convention as the merge_{claude,gemini,cursor,codex} callers.
+    with FileLock(target_path):
+        # Read existing
+        data = {}
+        if os.path.exists(target_path):
+            try:
+                with open(target_path, "r", encoding="utf-8") as f:
+                    raw = f.read().strip()
+                    data = json.loads(raw) if raw else {}
+            except (json.JSONDecodeError, OSError):
+                # Don't corrupt invalid JSON — surface and exit
+                print(f"  ⚠ Could not parse {target_path}; skipping MCP registration.", file=sys.stderr)
+                return False
+
+        if not isinstance(data, dict):
+            print(f"  ⚠ {target_path} is not a JSON object; skipping MCP registration.", file=sys.stderr)
+            return False
+
+        servers = data.setdefault("mcpServers", {})
+        if not isinstance(servers, dict):
+            print(f"  ⚠ mcpServers in {target_path} is not an object; skipping MCP registration.", file=sys.stderr)
+            return False
+
+        existing = servers.get("vibemon")
+        desired = {
+            "url": MCP_URL,
+            "headers": {"Authorization": f"Bearer {api_key}"},
+        }
+        if include_type:
+            desired = {"type": "http", **desired}
+
+        if existing == desired:
+            return False  # already up to date
+
+        servers["vibemon"] = desired
+
+        # Atomic write — temp file in same dir then os.replace
+        fd, tmp = tempfile.mkstemp(dir=target_dir, prefix=".vibemon.", suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            os.replace(tmp, target_path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    return True
+
+
+def main() -> int:
+    if len(sys.argv) < 3:
+        print("usage: merge_mcp.py <target_path> <api_key> [claude|cursor]", file=sys.stderr)
+        return 2
+    target_path = sys.argv[1]
+    api_key = sys.argv[2]
+    kind = sys.argv[3] if len(sys.argv) > 3 else "claude"
+    if not api_key.startswith("vbm_"):
+        print("  ⚠ API key does not start with 'vbm_'; skipping MCP registration.", file=sys.stderr)
+        return 0
+    changed = merge(target_path, api_key, include_type=(kind != "cursor"))
+    if changed:
+        print(f"  ✓ MCP server 'vibemon' registered in {target_path}")
+    else:
+        print(f"  · MCP server already up-to-date in {target_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+PYMERGE_CURSOR_MCP
 fi
 
 # ─── 6. Test connection ──────────────────────────────────────────────
@@ -1537,3 +2124,6 @@ else
     echo "       echo 'no_commit_msg=1' >> ~/.vibemon/config"
   fi
 fi
+echo ""
+echo "   ℹ MCP: restart any running Claude Code / Cursor session to load the"
+echo "     'vibemon' MCP server (verify with /mcp in Claude Code)."

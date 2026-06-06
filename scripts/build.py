@@ -47,6 +47,7 @@ WINDOWS_BUNDLE_FILES = [
     "merge_gemini.py",
     "merge_cursor.py",
     "merge_codex.py",
+    "merge_mcp.py",
 ]
 
 
@@ -105,6 +106,7 @@ def build_install_sh():
         "merge_gemini.py": lambda: read("merge_gemini.py").rstrip("\n"),
         "merge_cursor.py": lambda: read("merge_cursor.py").rstrip("\n"),
         "merge_codex.py":  lambda: read("merge_codex.py").rstrip("\n"),
+        "merge_mcp.py":    lambda: read("merge_mcp.py").rstrip("\n"),
     }
     out = substitute(template, providers)
 

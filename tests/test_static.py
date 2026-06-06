@@ -15,11 +15,13 @@ import pytest
 
 
 HEREDOCS = [
-    ("NOTIFY_SCRIPT",   "shell"),  # bash heredoc body — validate as bash
-    ("PYMERGE_CLAUDE",  "python"),
-    ("PYMERGE_GEMINI",  "python"),
-    ("PYMERGE_CURSOR",  "python"),
-    ("PYMERGE_CODEX",   "python"),
+    ("NOTIFY_SCRIPT",       "shell"),  # bash heredoc body — validate as bash
+    ("PYMERGE_CLAUDE",      "python"),
+    ("PYMERGE_GEMINI",      "python"),
+    ("PYMERGE_CURSOR",      "python"),
+    ("PYMERGE_CODEX",       "python"),
+    ("PYMERGE_CLAUDE_MCP",  "python"),
+    ("PYMERGE_CURSOR_MCP",  "python"),
 ]
 
 
@@ -102,6 +104,42 @@ def test_embedded_heredoc_syntax(marker, kind, dist_dir):
     elif kind == "python":
         ok, err = _py_check(body)
         assert ok, f"{marker} (python) syntax error:\n{err}"
+
+
+# (marker, extra_args) — each PYMERGE_* heredoc is `python3 - <target> [extra…]`,
+# mirroring the exact argv install.sh passes (MCP heredocs get the api key, and
+# the cursor MCP heredoc additionally gets the "cursor" kind selector).
+# Syntax checks (py_compile) above cannot catch a runtime NameError such as a
+# missing `# %%EMBED:lock.py%%` (FileLock undefined). This actually EXECUTES
+# each heredoc body against a temp config and asserts a clean exit + written file.
+EXEC_HEREDOCS = [
+    ("PYMERGE_CLAUDE", []),
+    ("PYMERGE_GEMINI", []),
+    ("PYMERGE_CURSOR", []),
+    ("PYMERGE_CODEX", []),
+    ("PYMERGE_CLAUDE_MCP", ["vbm_testkey"]),
+    ("PYMERGE_CURSOR_MCP", ["vbm_testkey", "cursor"]),
+]
+
+
+@pytest.mark.parametrize("marker,extra_args", EXEC_HEREDOCS)
+def test_embedded_heredoc_executes(marker, extra_args, dist_dir, tmp_path):
+    with open(os.path.join(dist_dir, "install.sh"), encoding="utf-8") as f:
+        src = f.read()
+    body = _extract_heredoc(src, marker)
+    assert body is not None, f"heredoc {marker} not found in dist/install.sh"
+
+    target = str(tmp_path / "config.json")
+    args = [target] + extra_args
+    r = subprocess.run(
+        [sys.executable, "-", *args],
+        input=body, capture_output=True, text=True,
+    )
+    assert r.returncode == 0, (
+        f"{marker} crashed at runtime (e.g. missing lock.py embed → "
+        f"NameError: FileLock):\nstdout: {r.stdout}\nstderr: {r.stderr}"
+    )
+    assert os.path.exists(target), f"{marker} ran but wrote no config file"
 
 
 def test_build_is_reproducible(root_dir):

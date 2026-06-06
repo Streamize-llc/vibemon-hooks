@@ -141,6 +141,7 @@ CURSOR_HOOKS="$HOME/.cursor/hooks.json"
 if command -v cursor &>/dev/null || [ -d "$HOME/.cursor" ]; then
   mkdir -p "$(dirname "$CURSOR_HOOKS")"
   python3 - "$CURSOR_HOOKS" << 'PYMERGE_CURSOR'
+# %%EMBED:lock.py%%
 # %%EMBED:merge_cursor.py%%
 PYMERGE_CURSOR
   echo "  ✓ Cursor hooks configured ($CURSOR_HOOKS)"
@@ -151,9 +152,30 @@ CODEX_SETTINGS="$HOME/.codex/settings.json"
 if command -v codex &>/dev/null || [ -d "$HOME/.codex" ]; then
   mkdir -p "$(dirname "$CODEX_SETTINGS")"
   python3 - "$CODEX_SETTINGS" << 'PYMERGE_CODEX'
+# %%EMBED:lock.py%%
 # %%EMBED:merge_codex.py%%
 PYMERGE_CODEX
   echo "  ✓ Codex CLI hooks configured ($CODEX_SETTINGS)"
+fi
+
+# ─── 5e. Register VibeMon MCP server (Claude Code + Cursor) ──────────
+# Phase 2: enable AI agents to read/write TODOs via Model Context Protocol.
+# Endpoint: https://vibemon.dev/api/mcp (Streamable HTTP transport)
+CLAUDE_MCP_CONFIG="$HOME/.claude.json"
+if [ -d "$HOME/.claude" ] || command -v claude &>/dev/null; then
+  python3 - "$CLAUDE_MCP_CONFIG" "$API_KEY" << 'PYMERGE_CLAUDE_MCP'
+# %%EMBED:lock.py%%
+# %%EMBED:merge_mcp.py%%
+PYMERGE_CLAUDE_MCP
+fi
+
+# Cursor gets the docs-exact remote-server shape (url + headers, no "type").
+CURSOR_MCP_CONFIG="$HOME/.cursor/mcp.json"
+if command -v cursor &>/dev/null || [ -d "$HOME/.cursor" ]; then
+  python3 - "$CURSOR_MCP_CONFIG" "$API_KEY" cursor << 'PYMERGE_CURSOR_MCP'
+# %%EMBED:lock.py%%
+# %%EMBED:merge_mcp.py%%
+PYMERGE_CURSOR_MCP
 fi
 
 # ─── 6. Test connection ──────────────────────────────────────────────
@@ -177,3 +199,6 @@ else
     echo "       echo 'no_commit_msg=1' >> ~/.vibemon/config"
   fi
 fi
+echo ""
+echo "   ℹ MCP: restart any running Claude Code / Cursor session to load the"
+echo "     'vibemon' MCP server (verify with /mcp in Claude Code)."

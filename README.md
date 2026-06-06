@@ -38,6 +38,24 @@ Full signal catalog: [SIGNALS.md](SIGNALS.md). Wire format:
 [contract/envelope-v2.schema.json](contract/envelope-v2.schema.json).
 Privacy guarantees: [PRIVACY.md](PRIVACY.md).
 
+### MCP registration (v21+)
+
+Besides hooks, the installer registers the **vibemon MCP server**
+(`https://vibemon.dev/api/mcp`, Streamable HTTP) so your AI agents can
+read and write your team TODOs with the same API key:
+
+| File | Entry written |
+|---|---|
+| `~/.claude.json` (Claude Code, user scope) | `mcpServers.vibemon = {"type": "http", "url", "headers"}` |
+| `~/.cursor/mcp.json` (Cursor) | `mcpServers.vibemon = {"url", "headers"}` |
+
+The merge is idempotent and surgical: existing MCP servers and all
+unrelated config are preserved; a file that can't be parsed is left
+untouched (registration skipped). Re-running with a rotated key updates
+only the `Authorization` header. Restart running agent sessions to pick
+the server up. To remove, delete the `vibemon` entry from `mcpServers`
+in those files.
+
 ---
 
 ## Repo layout
@@ -50,7 +68,8 @@ vibemon-hooks/
 │   ├── notify.sh                        ← per-hook handler
 │   ├── extract.py                       ← envelope builder + sanitizer
 │   ├── classify.py                      ← bash command classifier
-│   └── merge_{claude,gemini,cursor,codex}.py
+│   ├── merge_{claude,gemini,cursor,codex}.py
+│   └── merge_mcp.py                     ← MCP server registration (v21+)
 ├── dist/install.sh                      ← BUILT, COMMITTED, REPRODUCIBLE
 ├── dist/install.sh.sha256               ← integrity hash
 ├── contract/
@@ -63,7 +82,8 @@ vibemon-hooks/
 │   ├── test_envelope_golden.py          ← contract
 │   ├── test_privacy_canary.py           ← privacy invariant
 │   ├── test_install_idempotent.py       ← merge safety
-│   └── test_static.py                   ← bash -n + py_compile + reproducibility
+│   ├── test_merge_mcp.py                ← MCP registration safety
+│   └── test_static.py                   ← bash -n + py_compile + heredoc exec + reproducibility
 ├── scripts/
 │   ├── build.py                         ← src/ → dist/install.sh
 │   └── regen_golden.py                  ← refresh contract goldens
