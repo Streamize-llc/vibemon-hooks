@@ -131,13 +131,22 @@ def test_embedded_heredoc_executes(marker, extra_args, dist_dir, tmp_path):
 
     target = str(tmp_path / "config.json")
     args = [target] + extra_args
-    # encoding= is REQUIRED: on Windows, text=True alone encodes stdin with
-    # the locale codec (cp1252), so the em dashes in the embedded docstrings
-    # become \x97 and Python rejects the stdin script as non-UTF-8 source.
-    # Same lesson as v17's "encoding on every open()", applied to subprocess.
+    # utf-8 must be pinned at BOTH ends on Windows (same lesson as v17's
+    # "encoding on every open()", applied to subprocess):
+    #   - encoding=: text=True alone encodes our stdin with the locale codec
+    #     (cp1252), so the em dashes in the embedded docstrings become \x97
+    #     and Python rejects the stdin script as non-UTF-8 source.
+    #   - PYTHONIOENCODING: the child's stdout is a cp1252 PIPE in CI, so
+    #     merge_mcp.main()'s "✓" print dies with UnicodeEncodeError. The
+    #     real heredocs only ever run under install.sh (Unix, utf-8 or
+    #     PEP 538-coerced locales; Windows installs go through install.py,
+    #     which never executes these __main__ blocks) — so the harness must
+    #     reproduce that utf-8 stdio, not the runner's pipe codec.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     r = subprocess.run(
         [sys.executable, "-", *args],
         input=body, capture_output=True, text=True, encoding="utf-8",
+        env=env,
     )
     assert r.returncode == 0, (
         f"{marker} crashed at runtime (e.g. missing lock.py embed → "
