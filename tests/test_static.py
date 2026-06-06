@@ -131,9 +131,13 @@ def test_embedded_heredoc_executes(marker, extra_args, dist_dir, tmp_path):
 
     target = str(tmp_path / "config.json")
     args = [target] + extra_args
+    # encoding= is REQUIRED: on Windows, text=True alone encodes stdin with
+    # the locale codec (cp1252), so the em dashes in the embedded docstrings
+    # become \x97 and Python rejects the stdin script as non-UTF-8 source.
+    # Same lesson as v17's "encoding on every open()", applied to subprocess.
     r = subprocess.run(
         [sys.executable, "-", *args],
-        input=body, capture_output=True, text=True,
+        input=body, capture_output=True, text=True, encoding="utf-8",
     )
     assert r.returncode == 0, (
         f"{marker} crashed at runtime (e.g. missing lock.py embed → "
