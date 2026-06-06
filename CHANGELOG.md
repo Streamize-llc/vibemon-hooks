@@ -1,5 +1,43 @@
 # Changelog
 
+## v22 — 2026-06-06
+
+HEREDOC commit titles survive quote characters in the body.
+
+### Why
+v18 fixed `commit.message` capturing the literal `$(cat <<'EOF'` opener,
+but only for *clean* bodies. Production data (including this repo's own
+v21 release commit) showed two surviving failure modes, both triggered
+by quote characters inside the HEREDOC body:
+
+1. **Double-quoted phrases** (`mask "no data" instead`) — each `"`
+   toggles shlex's quote state mid-body, so the `-m` token ends at the
+   first unquoted whitespace *before* the closing DELIM. The heredoc
+   regex then fails and the literal opener came back as the title.
+2. **Odd quote count** (an apostrophe or `"` landing in an unquoted
+   stretch) — shlex aborts with "unclosed quote", the whole command's
+   tokens were dropped, and the event lost BOTH its title and its
+   `git.commit` category (`bash.category` = `""` → commit silently
+   uncounted downstream).
+
+### What changed
+- `classify.py extract_commit_message`: when the `-m` token comes back
+  truncated at the opener (or tokenization lost the argument), fall back
+  to searching the **raw command string** with a flag-anchored regex
+  (`-m` / `-am` / `--message[=]` immediately followed by `$(cat <<`).
+  The anchor guarantees only the heredoc that IS the message argument
+  can match — a heredoc belonging to another command in the chain can
+  never be read (privacy invariant preserved), and the literal opener
+  can never be returned again.
+- `classify.py _chain_token_segments`: on mid-stream tokenization abort
+  (unclosed quote), keep the in-flight segment's tokens so
+  `git commit -m "$(…odd quotes…)"` still classifies as `git.commit`.
+- Tests: +9 covering quoted phrases, unbalanced quotes, chains,
+  body-mentions-`git commit -m`, foreign-heredoc-never-stolen, and a
+  distilled reproduction of the actual v21 release commit. New contract
+  fixture + golden (`bash_git_commit_heredoc_quoted`) locks the case
+  end-to-end through both runtimes; all existing goldens byte-unchanged.
+
 ## v21 — 2026-06-06
 
 MCP server registration (Phase 2) + hook-merge locking parity.

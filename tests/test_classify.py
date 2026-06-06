@@ -166,3 +166,38 @@ def test_chain_never_leaks_body():
     result = classify_bash(chained)
     assert "CANARY" not in result
     assert result == "git.commit"
+
+
+def test_chain_unbalanced_quote_still_classifies_commit():
+    # An odd number of quote characters inside a HEREDOC body aborts shlex
+    # mid-stream (unclosed quote); the in-flight tokens must be kept so the
+    # command still classifies as git.commit instead of category "" — losing
+    # the category silently drops the commit event downstream (2026-06-06).
+    cmd = (
+        'git commit -m "$(cat <<\'EOF\'\n'
+        "fix: unbalanced\n"
+        "\n"
+        'an unmatched " quote in prose\n'
+        'EOF\n)"'
+    )
+    assert classify_bash(cmd) == "git.commit"
+
+
+def test_chain_quoted_phrase_body_still_classifies_commit():
+    # Double-quoted phrases in the body mangle the -m token but must not
+    # affect chain classification.
+    cmd = (
+        'git add -A && git commit -m "$(cat <<\'EOF\'\n'
+        "feat: x\n"
+        "\n"
+        '"phrase one" and "phrase two"\n'
+        'EOF\n)" && git push'
+    )
+    assert classify_bash(cmd) == "git.commit"
+
+
+def test_chain_tokens_partial_on_unbalanced_quote():
+    # _chain_token_segments keeps fully-emitted tokens of the segment that
+    # was being built when tokenization aborted.
+    segs = _chain_token_segments('git commit -m "unclosed')
+    assert segs and segs[0][:3] == ["git", "commit", "-m"]

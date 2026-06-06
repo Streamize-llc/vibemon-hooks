@@ -1,0 +1,9 @@
+{
+  "event_type": "bash",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git commit -m \"$(cat <<'EOF'\nfeat: heredoc title with quoted phrases\n\nmask \"no data\" instead of misreading it as \"instant tool\" — the\n{\"type\":\"http\",url,headers} snippet plus a bare open(\"w\") call.\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\" && git log --oneline -1",
+    "description": "Commit changes"
+  },
+  "session_id": "sess-bash-hd-1"
+}

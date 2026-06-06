@@ -31,6 +31,33 @@ _HEREDOC_RE = re.compile(
     re.DOTALL | re.VERBOSE,
 )
 
+# A `-m` token that *starts* like the HEREDOC opener but failed _HEREDOC_RE
+# means shlex mangled it: double quotes inside the body toggle shlex's quote
+# state, so the token ends at the first unquoted whitespace instead of the
+# closing DELIM. Detected in extract_commit_message and recovered from the
+# raw command string via _COMMIT_HEREDOC_RE below.
+_HEREDOC_OPENER_PREFIX_RE = re.compile(r"^\$\(\s*cat\s+<<")
+
+# Raw-command fallback for the mangled case above. Anchored to the message
+# flag (`-m` / `-am` / `--message[=]`) immediately followed by `$(cat <<` so
+# a heredoc belonging to a *different* command in the chain can never be
+# mistaken for the commit message.
+_COMMIT_HEREDOC_RE = re.compile(
+    r"""(?<!\S)                # flag starts a word
+        (?:--message|-[A-Za-z]*m)  # -m / -am / --message[=]
+        [=\s]+["']?            # flag separator + optional opening quote
+        \$\(\s*cat\s+          # $(cat
+        <<-?\s*                # <<  or  <<-
+        ['"]?(\w+)['"]?        # DELIM  (optionally quoted)
+        \s*\n                  # newline after opener
+        (.*?)                  # body (lazy)
+        \n\s*\1\b              # closing DELIM
+    """,
+    re.DOTALL | re.VERBOSE,
+)
+
+_GIT_COMMIT_POS_RE = re.compile(r"\bgit\s+commit\b")
+
 
 def _first_nonempty_line(body, cap=COMMIT_MSG_MAX):
     """Return the first stripped non-empty line of `body`, capped."""
@@ -114,7 +141,13 @@ def _chain_token_segments(cmd):
             else:
                 cur.append(tok)
     except ValueError:
-        return segs  # best-effort on malformed input (unclosed quote etc.)
+        # Best-effort on malformed input (unclosed quote etc.) — keep the
+        # in-flight segment too, so `git commit -m "$(…unbalanced ' or "…)"`
+        # still classifies as git.commit instead of dropping the whole
+        # command (category "" would lose the event downstream).
+        if cur:
+            segs.append(cur)
+        return segs
     if cur:
         segs.append(cur)
     return segs
@@ -153,15 +186,34 @@ def _commit_message_from_tokens(tokens):
 def extract_commit_message(cmd):
     """Extract the commit message title from a `git commit -m ...` command.
 
-    Chain-aware: scans each `&&`/`||`/`;`/`|`/newline segment so agent
-    chains like `git add . && git commit -m "feat: x" && git push` still
-    yield the message. Returns the first line (COMMIT_MSG_MAX cap) or ""
-    if no segment contains a parseable `git commit -m`.
+    Chain-aware: scans each `&&`/`||`/`;`/`|` segment so agent chains like
+    `git add . && git commit -m "feat: x" && git push` still yield the
+    message.
+
+    Double quotes inside a HEREDOC body confuse the shlex pass (each `"`
+    toggles its quote state mid-body): the `-m` token either comes back
+    truncated at the opener (`$(cat <<'EOF'` — the very string v18 was
+    meant to eliminate) or, with an odd quote count, tokenization aborts
+    and the argument is lost. In both cases fall back to searching the raw
+    command for the flag-anchored heredoc — the anchor guarantees only the
+    heredoc that IS the message argument can ever match, never another
+    command's heredoc in the chain.
+
+    Returns the first line (COMMIT_MSG_MAX cap) or "".
     """
-    for seg_tokens in _chain_token_segments(cmd or ""):
+    cmd = cmd or ""
+    for seg_tokens in _chain_token_segments(cmd):
         result = _commit_message_from_tokens(seg_tokens)
-        if result:
-            return result
+        if not result:
+            continue
+        if _HEREDOC_OPENER_PREFIX_RE.match(result):
+            break  # mangled heredoc token — recover from the raw string below
+        return result
+    scope = _GIT_COMMIT_POS_RE.search(cmd)
+    if scope:
+        m = _COMMIT_HEREDOC_RE.search(cmd, scope.start())
+        if m:
+            return _first_nonempty_line(m.group(2))
     return ""
 
 

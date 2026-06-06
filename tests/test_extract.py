@@ -497,6 +497,105 @@ def test_extract_commit_message_heredoc_in_long_message_flag():
     assert extract_commit_message(cmd) == "refactor: long-form flag heredoc"
 
 
+# ─── HEREDOC bodies containing quote characters ──────────────────────
+# Discovered from production data (2026-06-06): bodies with double-quoted
+# PHRASES (`mask "no data" instead`) toggle shlex's quote state mid-body, so
+# the -m token ends at the first unquoted whitespace — before the closing
+# DELIM — and the old code returned the literal "$(cat <<'EOF'" opener
+# again (the very bug v18 fixed for clean bodies). An ODD number of quotes
+# aborted tokenization entirely, losing both the title AND the git.commit
+# category. Fixed by the flag-anchored raw-string fallback in classify.py.
+
+def test_extract_commit_message_heredoc_body_with_quoted_phrases():
+    cmd = _claude_code_style_heredoc(
+        "fix: quoted phrases in body",
+        "",
+        'mask "no data" instead of misreading it as "instant tool".',
+        'previously a bare open("w") truncate-race.',
+    )
+    result = extract_commit_message(cmd)
+    assert result == "fix: quoted phrases in body"
+    assert "$(cat" not in result
+
+
+def test_extract_commit_message_heredoc_body_unbalanced_quote():
+    cmd = _claude_code_style_heredoc(
+        "fix: unbalanced quote",
+        "",
+        'an unmatched " quote in prose',
+    )
+    assert extract_commit_message(cmd) == "fix: unbalanced quote"
+
+
+def test_extract_commit_message_heredoc_quoted_body_in_chain():
+    cmd = (
+        'git add -A && git commit -m "$(cat <<\'EOF\'\n'
+        "feat: chained with quotes\n"
+        "\n"
+        "uses \"phrase one\" and \"phrase two\" and user's contraction.\n"
+        'EOF\n)" && git push origin main'
+    )
+    assert extract_commit_message(cmd) == "feat: chained with quotes"
+
+
+def test_extract_commit_message_heredoc_body_mentions_git_commit():
+    # Body text that itself contains a `git commit -m` example must never be
+    # mistaken for the real message — after the mangled -m token, the body's
+    # token soup can form a fake `git commit -m <word>` segment.
+    cmd = _claude_code_style_heredoc(
+        "docs: explain commit hooks",
+        "",
+        'with "quoted phrase" to force the mangled-token path,',
+        'then an example: git commit -m "evil-fake-title" inside the body.',
+    )
+    result = extract_commit_message(cmd)
+    assert result == "docs: explain commit hooks"
+    assert "evil-fake-title" not in result
+
+
+def test_extract_commit_message_foreign_heredoc_never_stolen():
+    # A heredoc that is NOT the -m argument must never be read as the title —
+    # the raw-string fallback is anchored to the message flag.
+    cmd = (
+        "cat > notes.md <<'EOF'\n"
+        "SECRET_note_line\n"
+        "EOF\n"
+        'git commit -m "docs: plain title"'
+    )
+    result = extract_commit_message(cmd)
+    assert "SECRET_note_line" not in result
+    assert "$(cat" not in result
+    # With no -m anywhere, nothing comes back at all.
+    cmd2 = (
+        "cat > notes.md <<'EOF'\n"
+        "SECRET_note_line\n"
+        "EOF\n"
+        "git commit --amend --no-edit"
+    )
+    assert extract_commit_message(cmd2) == ""
+
+
+def test_extract_commit_message_v21_release_regression():
+    # Distilled from this repo's actual v21 release commit — the JSON-ish
+    # snippet plus three quoted phrases recorded commit.message =
+    # "$(cat <<'EOF'" in production.
+    cmd = (
+        'git commit -m "$(cat <<\'EOF\'\n'
+        "v21: MCP server registration (Phase 2) + merge locking parity\n"
+        "\n"
+        'Claude Code\'s ~/.claude.json (user scope, {"type":"http",url,headers} —\n'
+        "the same shape `claude mcp add --transport http` writes) and Cursor's\n"
+        '"treat as empty" like the hook merges do; previously a bare open("w")\n'
+        'truncate-race. Prints a "restart your agent session" hint.\n'
+        "\n"
+        "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>\n"
+        'EOF\n)" && git log --oneline -2'
+    )
+    assert extract_commit_message(cmd) == (
+        "v21: MCP server registration (Phase 2) + merge locking parity"
+    )
+
+
 # ─── safe_command_head — env-var / secret stripping ──────────────────
 # Discovered from production data (2026-04-24): a one-off curl debugging
 # session leaked the first 32 chars of `SRK='sb_secret_...'` into

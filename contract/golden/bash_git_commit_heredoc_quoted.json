@@ -1,0 +1,21 @@
+{
+  "agent": "claude_code",
+  "cwd": "/Users/x/proj",
+  "event": "bash",
+  "payload": {
+    "project_root": "user/repo",
+    "session_id": "sess-bash-hd-1",
+    "tool_input": {},
+    "tool_name": "Bash"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-bash-hd-1",
+  "signals": {
+    "bash.byte_len": 276,
+    "bash.category": "git.commit",
+    "bash.head": "git",
+    "commit.message": "feat: heredoc title with quoted phrases",
+    "tool.name": "bash"
+  },
+  "v": 2
+}
