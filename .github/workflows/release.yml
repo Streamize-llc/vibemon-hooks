@@ -107,8 +107,3 @@ jobs:
             dist-installer/VibeMonSetup.exe.sha256
           fail_on_unmatched_files: true
 
-  # NOTE: a macOS GUI installer (installer/macos, .dmg) shipped in v24 and
-  # was retired the same day — macOS users of AI coding agents are
-  # terminal-capable, and the unsigned-.app Gatekeeper dance on macOS 15+
-  # is worse UX than the one-liner. Resurrect from the v24/v25 tags if a
-  # signed build ever becomes worth it.
