@@ -1,5 +1,35 @@
 # Changelog
 
+## v24 — 2026-06-06
+
+macOS GUI installer (Phase 1) + piped-install stdin fix.
+
+### Why
+Non-terminal users (vibe-coders on Cursor especially) had no install
+path that didn't involve copy-pasting a shell one-liner. Separately,
+while updating a machine via `curl … | sh` we found the install output
+silently ended right after "Testing connection…".
+
+### What changed
+- **New `installer/macos/`** — "VibeMon Installer.app" (SwiftUI, single
+  file, universal arm64+x86_64, ad-hoc signed). A deliberate *thin
+  shell*: it downloads `https://vibemon.dev/install.sh` (the same
+  auditable release artifact) and runs it with the pasted API key —
+  zero install logic of its own, so hook merges, privacy guarantees,
+  idempotency and daily auto-update are all inherited. Features:
+  `vbm_` key validation, clipboard auto-prefill, Command Line Tools
+  preflight (python3), streamed install log, restart-your-agent
+  success screen. `release.yml` gains an `installer-macos` job that
+  attaches `VibeMon-Installer.dmg` (+ sha256) to every release.
+  Unsigned-by-decision for launch — macOS shows "Open Anyway" friction;
+  Developer ID + notarization is the documented upgrade path.
+- **install.sh section 6: `</dev/null` on the test probe.** In piped
+  installs (`curl … | sh`) stdin is the pipe still holding the rest of
+  the script; notify.sh's `cat > "$STDIN_FILE"` slurped it and the
+  install silently ended at the connection test. Functionally harmless
+  today (only the final echoes were lost) but a landmine for any future
+  step added after section 6. Pinned by a static test.
+
 ## v23 — 2026-06-06
 
 Auto-update actually works now — four compounding bugs fixed.

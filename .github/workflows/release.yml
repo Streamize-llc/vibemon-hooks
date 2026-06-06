@@ -61,3 +61,22 @@ jobs:
             release/sha256sum.txt
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  # macOS GUI installer (Phase 1) — a thin shell over install.sh, built on
+  # a macOS runner and attached to the same release the job above created.
+  installer-macos:
+    runs-on: macos-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build VibeMon Installer.app + dmg
+        run: bash installer/macos/build.sh dist-installer
+
+      - name: Attach installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-installer/VibeMon-Installer.dmg
+            dist-installer/VibeMon-Installer.dmg.sha256
+          fail_on_unmatched_files: true

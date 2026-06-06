@@ -155,6 +155,22 @@ def test_embedded_heredoc_executes(marker, extra_args, dist_dir, tmp_path):
     assert os.path.exists(target), f"{marker} ran but wrote no config file"
 
 
+def test_piped_install_survives_test_probe(dist_dir):
+    """`curl | sh` regression (v24): the section-6 notify.sh test probe
+    inherits the pipe as stdin; without an explicit </dev/null redirect,
+    notify.sh's `cat > "$STDIN_FILE"` slurps the remainder of install.sh
+    and the script silently ends mid-run."""
+    with open(os.path.join(dist_dir, "install.sh"), encoding="utf-8") as f:
+        src = f.read()
+    probe_lines = [
+        l for l in src.splitlines()
+        if '"$VIBEMON_DIR/notify.sh" test' in l and not l.lstrip().startswith("#")
+    ]
+    assert probe_lines, "test-probe invocation not found in dist/install.sh"
+    for l in probe_lines:
+        assert "</dev/null" in l, f"test probe must pin stdin: {l!r}"
+
+
 def test_build_is_reproducible(root_dir):
     """Re-running scripts/build.py must produce byte-identical dist/install.sh."""
     r = subprocess.run(

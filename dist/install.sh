@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="23"
+VIBEMON_VERSION="24"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -2173,7 +2173,10 @@ fi
 # ─── 6. Test connection ──────────────────────────────────────────────
 echo ""
 echo "🔗 Testing connection…"
-bash "$VIBEMON_DIR/notify.sh" test
+# </dev/null is REQUIRED (v24): in piped installs (`curl … | sh`) stdin is
+# the pipe still holding the REST OF THIS SCRIPT; notify.sh's `cat >` would
+# slurp it and the install would silently end right here.
+bash "$VIBEMON_DIR/notify.sh" test </dev/null
 
 echo ""
 if [ "$IS_UPDATE" = true ]; then

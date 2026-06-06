@@ -22,3 +22,6 @@ htmlcov/
 
 # Build cache (dist/install.sh IS committed for reproducibility)
 build.log
+
+# macOS installer build output (built by CI per release, never committed)
+dist-installer/
