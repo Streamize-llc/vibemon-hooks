@@ -19,11 +19,11 @@ curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY
 curl -fsSL https://github.com/Streamize-llc/vibemon-hooks/releases/download/v12/install.sh | sh -s -- YOUR_API_KEY
 ```
 
-No terminal? The **macOS GUI installer** (`VibeMon-Installer.dmg` on every
-release, or [vibemon.dev/download](https://vibemon.dev/download)) is a thin
-SwiftUI shell that downloads and runs this exact script — zero install
-logic of its own (`installer/macos/`). Currently ad-hoc signed: macOS will
-warn on first open (System Settings → Privacy & Security → Open Anyway).
+No terminal? On **Windows** there's a GUI installer — `VibeMonSetup.exe`
+on every release, or [vibemon.dev/download](https://vibemon.dev/download).
+It bundles an embedded CPython (nothing to install first) and runs the
+same `install.py` the script path uses — zero install logic of its own
+(`installer/windows/`). macOS/Linux stay on the one-liner above.
 
 ---
 

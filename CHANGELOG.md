@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **macOS GUI installer retired** (shipped v24, removed same day by
+  product decision): macOS users of AI coding agents are
+  terminal-capable, and the unsigned-.app "Open Anyway" dance on
+  macOS 15+ is worse UX than the one-liner. `installer/macos/` deleted,
+  `installer-macos` CI job removed, `.dmg` assets pulled from the
+  v24/v25 releases, `/download` and `/VibeMon-Installer.dmg` dropped on
+  the web side. Resurrect from the v24/v25 tags if a *signed* build
+  ever becomes worth it. Windows (`VibeMonSetup.exe`) is unaffected —
+  that's where the install friction actually lives.
+
 ## v25 — 2026-06-06
 
 Windows GUI installer (Phase 2) — embedded Python, no prerequisites.

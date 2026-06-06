@@ -107,21 +107,8 @@ jobs:
             dist-installer/VibeMonSetup.exe.sha256
           fail_on_unmatched_files: true
 
-  # macOS GUI installer (Phase 1) — a thin shell over install.sh, built on
-  # a macOS runner and attached to the same release the job above created.
-  installer-macos:
-    runs-on: macos-latest
-    needs: release
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build VibeMon Installer.app + dmg
-        run: bash installer/macos/build.sh dist-installer
-
-      - name: Attach installer to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist-installer/VibeMon-Installer.dmg
-            dist-installer/VibeMon-Installer.dmg.sha256
-          fail_on_unmatched_files: true
+  # NOTE: a macOS GUI installer (installer/macos, .dmg) shipped in v24 and
+  # was retired the same day — macOS users of AI coding agents are
+  # terminal-capable, and the unsigned-.app Gatekeeper dance on macOS 15+
+  # is worse UX than the one-liner. Resurrect from the v24/v25 tags if a
+  # signed build ever becomes worth it.
