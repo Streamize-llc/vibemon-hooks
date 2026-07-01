@@ -15,8 +15,8 @@ pin it.
 # Install (latest — vibemon.dev redirects to the GitHub Release artifact):
 curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY
 
-# Pin to a specific version (more cautious):
-curl -fsSL https://github.com/Streamize-llc/vibemon-hooks/releases/download/v12/install.sh | sh -s -- YOUR_API_KEY
+# Pin to a specific version (more cautious — swap v25 for any tag on the releases page):
+curl -fsSL https://github.com/Streamize-llc/vibemon-hooks/releases/download/v25/install.sh | sh -s -- YOUR_API_KEY
 ```
 
 No terminal? On **Windows** there's a GUI installer — `VibeMonSetup.exe`
