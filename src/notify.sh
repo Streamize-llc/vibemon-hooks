@@ -91,8 +91,33 @@ if [ "$EVENT_TYPE" = "session_start" ]; then
     local CURRENT=""
     [ -f "$VIBEMON_DIR/version" ] && CURRENT=$(cat "$VIBEMON_DIR/version")
     # Sanity: LATEST must be a short numeric/version-ish string, not an HTML body.
+    # (The version string is unauthenticated, but it ONLY decides *whether* to
+    # attempt an update — the actual code never runs unless the downloaded
+    # installer passes Ed25519 signature verification below.)
     if [ -n "$LATEST" ] && [ ${#LATEST} -le 16 ] && [ "$LATEST" != "$CURRENT" ]; then
-      curl -fsSL "https://vibemon.dev/install.sh" 2>/dev/null | bash -s 2>/dev/null
+      # SIGNED update (CWE-494 fix): NEVER pipe a remote script to bash. Download
+      # the installer + its detached signature to a temp dir, verify the signature
+      # against the baked-in release public key with a pure-stdlib Ed25519 verifier,
+      # and execute ONLY on a valid signature. A compromised vibemon.dev / GitHub
+      # release can swap the bytes but cannot forge a signature without the secret
+      # seed (which lives only in a GitHub Actions secret), so verification fails
+      # and nothing runs. Unconfigured/placeholder key => verifier returns non-zero
+      # => no execution (fail-closed). The `if python3 … <<EOF` form keeps `set -e`
+      # from aborting on an expected non-zero verify.
+      local TMPD
+      TMPD=$(mktemp -d 2>/dev/null) || return 0
+      if curl -fsSL "https://vibemon.dev/install.sh" -o "$TMPD/install.sh" 2>/dev/null \
+         && curl -fsSL "https://vibemon.dev/install.sh.sig" -o "$TMPD/install.sh.sig" 2>/dev/null; then
+        if python3 - "$TMPD/install.sh" "$TMPD/install.sh.sig" >/dev/null 2>&1 <<'VIBEMON_VERIFY'
+# %%EMBED:ed25519.py%%
+# %%EMBED:release_pubkey.py%%
+# %%EMBED:verify_main.py%%
+VIBEMON_VERIFY
+        then
+          bash "$TMPD/install.sh" 2>/dev/null
+        fi
+      fi
+      rm -rf "$TMPD" 2>/dev/null || true
     fi
   }
   (_vibemon_update_check </dev/null >/dev/null 2>&1) & disown 2>/dev/null || true

@@ -41,6 +41,8 @@ WINDOWS_BUNDLE_FILES = [
     "lock.py",
     "classify.py",
     "extract.py",
+    "ed25519.py",
+    "release_pubkey.py",
     "notify.py",
     "install.py",
     "merge_claude.py",
@@ -84,11 +86,16 @@ def _read_version():
 
 # ─── Unix install.sh ──────────────────────────────────────────────────
 def build_notify_sh():
-    """Build the standalone notify.sh — embeds classify.py + extract.py."""
+    """Build the standalone notify.sh — embeds the envelope builder
+    (classify.py + extract.py) and the signed-update verifier
+    (ed25519.py + release_pubkey.py + verify_main.py)."""
     template = read("notify.sh")
     providers = {
-        "classify.py": lambda: read("classify.py").rstrip("\n"),
-        "extract.py":  lambda: read("extract.py").rstrip("\n"),
+        "classify.py":      lambda: read("classify.py").rstrip("\n"),
+        "extract.py":       lambda: read("extract.py").rstrip("\n"),
+        "ed25519.py":       lambda: read("ed25519.py").rstrip("\n"),
+        "release_pubkey.py": lambda: read("release_pubkey.py").rstrip("\n"),
+        "verify_main.py":   lambda: read("verify_main.py").rstrip("\n"),
     }
     return substitute(template, providers)
 

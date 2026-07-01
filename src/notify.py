@@ -16,9 +16,11 @@ tests/test_envelope_parity.py.
 Stdlib only.
 """
 
+import base64
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,6 +37,8 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from extract import build_envelope  # noqa: E402
+from ed25519 import checkvalid  # noqa: E402
+from release_pubkey import RELEASE_PUBKEY_HEX  # noqa: E402
 
 # Public Supabase functions URL — same hardcoded constant as notify.sh.
 API_URL = "https://sirpdtcwawcidhgtltps.supabase.co/functions/v1"
@@ -113,6 +117,19 @@ def _detect_project_root():
 
 
 # ─── Auto-update (session_start, mkdir-locked, daily) ───────────────
+def _download_to(url, dest, timeout=30):
+    """Download `url` to `dest`. Returns True on success, False on any failure."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "vibemon-notify"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read()
+        with open(dest, "wb") as f:
+            f.write(data)
+        return True
+    except Exception:
+        return False
+
+
 def _auto_update_once():
     """Atomic mkdir-based lock — directory creation is atomic on POSIX
     and NTFS. Identical semantics to notify.sh's `mkdir "$LOCK_DIR"`.
@@ -170,20 +187,53 @@ def _auto_update_once():
         if latest == current:
             return
 
-        # Spawn the appropriate self-updater detached so the parent hook
-        # returns immediately. PowerShell on Windows, bash on Unix.
+        # SIGNED update (CWE-494 fix): NEVER pipe a remote script to an
+        # interpreter (`iwr | iex` / `curl | bash`). Download the installer +
+        # its detached Ed25519 signature, verify the bytes against the baked-in
+        # release public key, and execute ONLY on a valid signature. A
+        # compromised vibemon.dev / GitHub release can swap the bytes but cannot
+        # forge a signature without the secret seed (which lives only in a
+        # GitHub Actions secret). We're already in the detached __update_check
+        # helper, so a synchronous download+verify+run here is off the hot path.
         try:
+            pk = bytes.fromhex((RELEASE_PUBKEY_HEX or "").strip())
+        except ValueError:
+            pk = b""
+        # Placeholder / unconfigured key => refuse to auto-update (fail-closed).
+        if len(pk) != 32 or pk == b"\x00" * 32:
+            return
+        art = "install.ps1" if IS_WINDOWS else "install.sh"
+        try:
+            tmpd = tempfile.mkdtemp(prefix="vbm_upd_")
+        except OSError:
+            return
+        try:
+            inst = os.path.join(tmpd, art)
+            sig_path = os.path.join(tmpd, art + ".sig")
+            if not (_download_to("https://vibemon.dev/" + art, inst)
+                    and _download_to("https://vibemon.dev/" + art + ".sig", sig_path)):
+                return
+            with open(inst, "rb") as f:
+                data = f.read()
+            with open(sig_path, "rb") as f:
+                sig = base64.b64decode(f.read().strip())
+            try:
+                checkvalid(sig, data, pk)  # raises on ANY failure
+            except Exception:
+                return  # signature invalid -> refuse to run the installer
             if IS_WINDOWS:
-                cmd = [
-                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-Command",
-                    "iwr -useb https://vibemon.dev/install.ps1 | iex",
-                ]
+                cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                       "-File", inst]
             else:
-                cmd = ["bash", "-c", "curl -fsSL https://vibemon.dev/install.sh | bash"]
-            _spawn_detached(cmd, payload=None)
+                cmd = ["bash", inst]
+            # Run synchronously (we're already detached) so cleanup can't race
+            # the child reading its own installer file.
+            subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=180)
         except Exception:
             pass
+        finally:
+            shutil.rmtree(tmpd, ignore_errors=True)
     finally:
         try:
             os.rmdir(lock_dir)

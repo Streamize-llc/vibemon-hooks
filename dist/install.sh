@@ -204,8 +204,269 @@ if [ "$EVENT_TYPE" = "session_start" ]; then
     local CURRENT=""
     [ -f "$VIBEMON_DIR/version" ] && CURRENT=$(cat "$VIBEMON_DIR/version")
     # Sanity: LATEST must be a short numeric/version-ish string, not an HTML body.
+    # (The version string is unauthenticated, but it ONLY decides *whether* to
+    # attempt an update — the actual code never runs unless the downloaded
+    # installer passes Ed25519 signature verification below.)
     if [ -n "$LATEST" ] && [ ${#LATEST} -le 16 ] && [ "$LATEST" != "$CURRENT" ]; then
-      curl -fsSL "https://vibemon.dev/install.sh" 2>/dev/null | bash -s 2>/dev/null
+      # SIGNED update (CWE-494 fix): NEVER pipe a remote script to bash. Download
+      # the installer + its detached signature to a temp dir, verify the signature
+      # against the baked-in release public key with a pure-stdlib Ed25519 verifier,
+      # and execute ONLY on a valid signature. A compromised vibemon.dev / GitHub
+      # release can swap the bytes but cannot forge a signature without the secret
+      # seed (which lives only in a GitHub Actions secret), so verification fails
+      # and nothing runs. Unconfigured/placeholder key => verifier returns non-zero
+      # => no execution (fail-closed). The `if python3 … <<EOF` form keeps `set -e`
+      # from aborting on an expected non-zero verify.
+      local TMPD
+      TMPD=$(mktemp -d 2>/dev/null) || return 0
+      if curl -fsSL "https://vibemon.dev/install.sh" -o "$TMPD/install.sh" 2>/dev/null \
+         && curl -fsSL "https://vibemon.dev/install.sh.sig" -o "$TMPD/install.sh.sig" 2>/dev/null; then
+        if python3 - "$TMPD/install.sh" "$TMPD/install.sh.sig" >/dev/null 2>&1 <<'VIBEMON_VERIFY'
+"""
+ed25519.py — self-contained, stdlib-only Ed25519 (RFC 8032).
+
+Why this exists: the auto-updater must verify a signature over the installer
+BEFORE executing it, and the client environment is guaranteed to have `python3`
+(install.sh checks for it; notify.py *is* python3) but NOTHING else — no pip
+packages, no `minisign`/`openssl` binary, cross-platform (macOS/Linux/Windows).
+So verification is done here in pure Python on stdlib `hashlib.sha512` only.
+
+This is the well-known public-domain reference implementation from the Ed25519
+authors (D. J. Bernstein et al.) / RFC 8032 Appendix A, unmodified in its math.
+It is deliberately the simple (slow) reference, not an optimized one: the client
+verifies a single signature at most once per day, so clarity/auditability beats
+speed, and matching the reference exactly is what lets the CI test check it
+against RFC 8032 test vectors + an independent library (PyNaCl).
+
+Used by:
+  - src/verify.py  — the client-side verifier CLI (embedded into notify.sh /
+    shipped in the Windows bundle).
+  - scripts/sign.py / scripts/keygen.py — release-time signing (CI) + one-time
+    key generation. Signing uses the SAME code path so the CI round-trip test
+    (`sign` here → `verify` here → PyNaCl) proves the whole chain.
+
+SECURITY: `checkvalid()` RAISES on any failure (bad signature, wrong length,
+off-curve point). Callers MUST treat any exception as "reject" (fail-closed).
+"""
+
+import hashlib
+
+b = 256
+q = 2 ** 255 - 19
+L = 2 ** 252 + 27742317777372353535851937790883648493
+
+
+def _H(m):
+    return hashlib.sha512(m).digest()
+
+
+def _expmod(base, e, m):
+    if e == 0:
+        return 1
+    t = _expmod(base, e // 2, m) ** 2 % m
+    if e & 1:
+        t = (t * base) % m
+    return t
+
+
+def _inv(x):
+    return _expmod(x, q - 2, q)
+
+
+d = -121665 * _inv(121666) % q
+_I = _expmod(2, (q - 1) // 4, q)
+
+
+def _xrecover(y):
+    xx = (y * y - 1) * _inv(d * y * y + 1)
+    x = _expmod(xx, (q + 3) // 8, q)
+    if (x * x - xx) % q != 0:
+        x = (x * _I) % q
+    if x % 2 != 0:
+        x = q - x
+    return x
+
+
+_By = 4 * _inv(5) % q
+_Bx = _xrecover(_By)
+B = [_Bx % q, _By % q]
+
+
+def _edwards(P, Q):
+    x1, y1 = P
+    x2, y2 = Q
+    x3 = (x1 * y2 + x2 * y1) * _inv(1 + d * x1 * x2 * y1 * y2)
+    y3 = (y1 * y2 + x1 * x2) * _inv(1 - d * x1 * x2 * y1 * y2)
+    return [x3 % q, y3 % q]
+
+
+def _scalarmult(P, e):
+    if e == 0:
+        return [0, 1]
+    Q = _scalarmult(P, e // 2)
+    Q = _edwards(Q, Q)
+    if e & 1:
+        Q = _edwards(Q, P)
+    return Q
+
+
+def _encodeint(y):
+    bits = [(y >> i) & 1 for i in range(b)]
+    return bytes(sum(bits[i * 8 + j] << j for j in range(8)) for i in range(b // 8))
+
+
+def _encodepoint(P):
+    x, y = P
+    bits = [(y >> i) & 1 for i in range(b - 1)] + [x & 1]
+    return bytes(sum(bits[i * 8 + j] << j for j in range(8)) for i in range(b // 8))
+
+
+def _bit(h, i):
+    return (h[i // 8] >> (i % 8)) & 1
+
+
+def _Hint(m):
+    h = _H(m)
+    return sum(2 ** i * _bit(h, i) for i in range(2 * b))
+
+
+def publickey(seed):
+    """32-byte secret seed -> 32-byte public key."""
+    if len(seed) != 32:
+        raise ValueError("seed must be 32 bytes")
+    h = _H(seed)
+    a = 2 ** (b - 2) + sum(2 ** i * _bit(h, i) for i in range(3, b - 2))
+    A = _scalarmult(B, a)
+    return _encodepoint(A)
+
+
+def signature(m, seed, pk):
+    """Sign message bytes `m` with 32-byte seed + its 32-byte public key -> 64-byte sig."""
+    h = _H(seed)
+    a = 2 ** (b - 2) + sum(2 ** i * _bit(h, i) for i in range(3, b - 2))
+    r = _Hint(bytes(h[i] for i in range(b // 8, b // 4)) + m)
+    R = _scalarmult(B, r)
+    S = (r + _Hint(_encodepoint(R) + pk + m) * a) % L
+    return _encodepoint(R) + _encodeint(S)
+
+
+def _isoncurve(P):
+    x, y = P
+    return (-x * x + y * y - 1 - d * x * x * y * y) % q == 0
+
+
+def _decodeint(s):
+    return sum(2 ** i * _bit(s, i) for i in range(0, b))
+
+
+def _decodepoint(s):
+    y = sum(2 ** i * _bit(s, i) for i in range(0, b - 1))
+    x = _xrecover(y)
+    if x & 1 != _bit(s, b - 1):
+        x = q - x
+    P = [x, y]
+    if not _isoncurve(P):
+        raise ValueError("decoding point that is not on curve")
+    return P
+
+
+def checkvalid(sig, m, pk):
+    """Verify 64-byte `sig` over message `m` under 32-byte public key `pk`.
+    RAISES ValueError on ANY failure — callers MUST treat that as reject."""
+    if len(sig) != b // 4:
+        raise ValueError("signature length is wrong")
+    if len(pk) != b // 8:
+        raise ValueError("public-key length is wrong")
+    R = _decodepoint(sig[0:b // 8])
+    A = _decodepoint(pk)
+    S = _decodeint(sig[b // 8:b // 4])
+    h = _Hint(_encodepoint(R) + pk + m)
+    if _scalarmult(B, S) != _edwards(R, _scalarmult(A, h)):
+        raise ValueError("signature does not pass verification")
+    return True
+"""
+release_pubkey.py — the ONE source of truth for VibeMon's release-signing
+public key. The matching SECRET seed lives ONLY in the GitHub Actions secret
+`VIBEMON_SIGNING_SEED` and is NEVER committed here.
+
+The auto-updater (notify.sh / notify.py) verifies every downloaded installer
+against this key before executing it. Rotate with `python3 scripts/keygen.py`,
+which overwrites the value below and prints a new secret seed to store in the
+GitHub secret.
+
+FAIL-CLOSED: while this is the 64-hex-char placeholder of all zeros (i.e. no
+real key has been generated yet), signature verification cannot succeed, so the
+auto-updater refuses to run ANY downloaded installer. That is the safe default:
+no signed key => no auto-update, never an unsigned exec. Run keygen to activate.
+"""
+
+RELEASE_PUBKEY_HEX = "0000000000000000000000000000000000000000000000000000000000000000"
+"""
+verify_main.py — client-side installer verifier (used by notify.sh's auto-update).
+
+Invoked as `python3 - <installer_path> <sig_path>` with ed25519.py + release_pubkey.py
+concatenated ABOVE it (see scripts/build.py's notify.sh embed). Exit codes:
+    0  signature valid  -> caller may execute the installer
+    1  signature INVALID -> caller MUST NOT execute (tampered / wrong key)
+    2  usage/IO error    -> caller MUST NOT execute
+    3  no release key configured (placeholder) -> caller MUST NOT execute
+Anything non-zero => do not run. Fail-closed by construction.
+
+Also importable/standalone for tests: falls back to real imports when the
+symbols aren't already in scope from the embed.
+"""
+
+import base64
+import sys
+
+try:
+    checkvalid  # provided by the embedded ed25519.py
+except NameError:  # standalone / test import
+    from ed25519 import checkvalid
+
+try:
+    RELEASE_PUBKEY_HEX  # provided by the embedded release_pubkey.py
+except NameError:
+    from release_pubkey import RELEASE_PUBKEY_HEX
+
+
+def verify_file(installer_path, sig_path, pubkey_hex):
+    pubkey_hex = (pubkey_hex or "").strip()
+    try:
+        pk = bytes.fromhex(pubkey_hex)
+    except ValueError:
+        return 3
+    # Placeholder / unconfigured key (all-zero or wrong length) => fail-closed.
+    if len(pk) != 32 or pk == b"\x00" * 32:
+        return 3
+    try:
+        with open(installer_path, "rb") as f:
+            data = f.read()
+        with open(sig_path, "rb") as f:
+            sig = base64.b64decode(f.read().strip())
+    except (OSError, ValueError):
+        return 2
+    try:
+        checkvalid(sig, data, pk)
+    except Exception:  # noqa: BLE001 — ANY failure means reject
+        return 1
+    return 0
+
+
+def main(argv):
+    if len(argv) != 3:
+        return 2
+    return verify_file(argv[1], argv[2], RELEASE_PUBKEY_HEX)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+VIBEMON_VERIFY
+        then
+          bash "$TMPD/install.sh" 2>/dev/null
+        fi
+      fi
+      rm -rf "$TMPD" 2>/dev/null || true
     fi
   }
   (_vibemon_update_check </dev/null >/dev/null 2>&1) & disown 2>/dev/null || true
