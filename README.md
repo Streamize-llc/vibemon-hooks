@@ -25,6 +25,17 @@ It bundles an embedded CPython (nothing to install first) and runs the
 same `install.py` the script path uses — zero install logic of its own
 (`installer/windows/`). macOS/Linux stay on the one-liner above.
 
+> **Before you install, two things to know:**
+> - **Auto-update:** on session start (once/day) VibeMon checks for a new
+>   release and installs it. Updates are **Ed25519-signed and verified against a
+>   key baked into the client before running** — a tampered release fails
+>   verification and is not executed ([SECURITY.md](SECURITY.md)). Pin a tag (the
+>   second command above) if you'd rather update by hand.
+> - **Telemetry:** hooks send an anonymized activity envelope (event type,
+>   file paths/extensions, line counts, git `owner/repo`, local hour/timezone).
+>   **Code, prompts, diffs, and command bodies are stripped** and this is
+>   enforced in CI. Full details + opt-outs: [PRIVACY.md](PRIVACY.md).
+
 ---
 
 ## What this code does
@@ -150,16 +161,28 @@ git diff contract/golden/             # REVIEW carefully
 
 ## Releasing
 
-1. Edit `VERSION` (e.g. `10` → `11`).
-2. Run `python3 scripts/build.py`. Commit `dist/install.sh` + `VERSION`.
-3. Tag: `git tag v11 && git push --tags`.
-4. CI builds, tests, attaches `install.sh` + `sha256sum.txt` to a
-   GitHub Release.
-5. `vibemon.dev/install.sh` automatically redirects to the latest tag.
+**One-time setup (enables signed auto-update):** run `python3 scripts/keygen.py`,
+store the printed seed as the GitHub Actions secret `VIBEMON_SIGNING_SEED`, and
+commit the updated `src/release_pubkey.py`. Until this is done the shipped client
+is fail-closed: it will not auto-update (no unsigned exec), and releases fail at
+the signing step.
 
-The `auto-update` mechanism inside `notify.sh` polls the new release
-once a day on `session_start` and re-runs `install.sh` when VERSION
-bumps.
+1. Edit `VERSION` (e.g. `10` → `11`).
+2. Run `python3 scripts/build.py`. Commit `dist/` + `VERSION`.
+3. Tag: `git tag v11 && git push --tags`.
+4. CI builds, tests, **signs** (`scripts/sign.py` → `install.sh.sig` /
+   `install.ps1.sig`), and attaches the installers + `.sig` + `sha256sum.txt`
+   to a GitHub Release.
+5. `vibemon.dev/install.sh` (and `…/install.sh.sig`) redirect to the latest tag.
+
+The `auto-update` mechanism inside `notify.sh` / `notify.py` polls the new release
+once a day on `session_start`, **downloads the installer + its signature, verifies
+it against the baked-in public key, and only then** re-runs `install.sh` when
+VERSION bumps. A tampered or unsigned artifact is never executed.
+
+> **Serving note:** `vibemon.dev` must serve/redirect `install.sh.sig` and
+> `install.ps1.sig` alongside the installers (same 302-to-Release pattern). If the
+> `.sig` is missing the client fails closed and skips the update.
 
 ---
 
