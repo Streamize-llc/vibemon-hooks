@@ -188,7 +188,7 @@ VERSION bumps. A tampered or unsigned artifact is never executed.
 
 ## Reporting a vulnerability
 
-See [SECURITY.md](SECURITY.md). TL;DR — email security@streamize.net,
+See [SECURITY.md](SECURITY.md). TL;DR — email admin@streamize.net,
 do not file a public issue. We respond within 72 hours.
 
 ---
