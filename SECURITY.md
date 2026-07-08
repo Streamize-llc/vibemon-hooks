@@ -14,7 +14,7 @@ Releases for audit purposes only — the auto-update mechanism in
 
 **Do not file a public issue or pull request.**
 
-Email **security@streamize.net** with:
+Email **admin@streamize.net** with:
 
 - A description of the issue
 - Steps to reproduce
