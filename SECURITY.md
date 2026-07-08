@@ -36,7 +36,7 @@ and cut a release.
 
 **Do not file a public issue or pull request.**
 
-Email **security@streamize.net** with:
+Email **admin@streamize.net** with:
 
 - A description of the issue
 - Steps to reproduce
