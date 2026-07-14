@@ -1,5 +1,40 @@
 # Changelog
 
+## v26 — 2026-07-15
+
+The installer requires bash, and now says so.
+
+### Why
+`install.sh` is a bash script — `set -o pipefail`, `local`, `[[ ]]` — but
+every command we published piped it to `sh`. Where `/bin/sh` is dash
+(Debian, Ubuntu) it died at line 10 with `set: Illegal option -o pipefail`,
+before parsing a single argument. **The advertised one-liner has never
+worked on those distros**, since the initial release.
+
+Two things hid it. macOS `/bin/sh` is bash in POSIX mode, so `BASH_VERSION`
+is set and `curl | sh` genuinely works there. And CI only ever ran the
+script under bash — layer 3 is `bash -n`, which by construction cannot see
+a dash incompatibility.
+
+Existing installs were never affected: every auto-update path already piped
+to `bash` (`notify.sh`, `notify.py`, and the Windows track). Only a first
+manual install on a dash-based distro hit this.
+
+### What changed
+- Usage strings and README now advertise `| bash -s --`. The README already
+  said `bash` in prose while its command block said `sh`.
+- **Guard against the wrong shell**, ahead of the first bash-ism. The
+  shebang is inert when the script arrives on stdin, so this is the only
+  thing that can catch it. It is POSIX so dash can parse it, and it fires
+  before any filesystem side effect — a wrong shell leaves no half-written
+  `~/.vibemon` behind.
+- `tests/test_dash_guard.py` pins all three properties: dash gets an
+  actionable error and exit 1, bash is not false-positived, and no usage
+  string may say `| sh` again.
+- Fixes two stale references: the generated-by line named `scripts/build.sh`
+  (it is `build.py`), and `notify.sh`'s comment explained `-L` by the old
+  apex→www redirect, which is now a 302 to the GitHub release asset.
+
 ## Unreleased
 
 - **macOS GUI installer retired** (shipped v24, removed same day by

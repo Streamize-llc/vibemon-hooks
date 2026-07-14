@@ -21,7 +21,7 @@ fi
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="25"
+VIBEMON_VERSION="26"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
