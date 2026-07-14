@@ -3,9 +3,20 @@
 #
 # Source: https://github.com/Streamize-llc/vibemon-hooks
 # Docs:   https://vibemon.dev/docs
-# This file is generated from src/install.sh by scripts/build.sh.
+# This file is generated from src/install.sh by scripts/build.py.
 #
-# Usage: curl -fsSL https://vibemon.dev/install.sh | sh -s -- API_KEY
+# Usage: curl -fsSL https://vibemon.dev/install.sh | bash -s -- API_KEY
+
+# The shebang above is ignored when this script arrives on stdin (`curl | sh`),
+# so a POSIX sh such as dash — /bin/sh on Debian/Ubuntu — would reach the
+# `set -o pipefail` below and die with a cryptic "Illegal option". Fail with an
+# actionable message instead. Must stay ahead of the first bash-ism, and must
+# itself be POSIX so dash can parse it.
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "❌ VibeMon's installer requires bash, not sh." >&2
+  echo "   Run: curl -fsSL https://vibemon.dev/install.sh | bash -s -- YOUR_API_KEY" >&2
+  exit 1
+fi
 
 set -euo pipefail
 
@@ -25,7 +36,7 @@ while [ $# -gt 0 ]; do
     --collect-commit-msg) COMMIT_MSG_FLAG=0 ;;
     --*)
       echo "❌ Unknown flag: $1" >&2
-      echo "Usage: curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY [--no-commit-msg]" >&2
+      echo "Usage: curl -fsSL https://vibemon.dev/install.sh | bash -s -- YOUR_API_KEY [--no-commit-msg]" >&2
       exit 1
       ;;
     *)
@@ -47,7 +58,7 @@ if [ -z "$API_KEY" ]; then
     IS_UPDATE=true
   else
     echo "❌ API key is required."
-    echo "Usage: curl -fsSL https://vibemon.dev/install.sh | sh -s -- YOUR_API_KEY [--no-commit-msg]"
+    echo "Usage: curl -fsSL https://vibemon.dev/install.sh | bash -s -- YOUR_API_KEY [--no-commit-msg]"
     exit 1
   fi
 fi
@@ -198,7 +209,7 @@ if [ "$EVENT_TYPE" = "session_start" ]; then
     fi
     printf '%s' "$NOW" > "$LAST_CHECK"
     local LATEST
-    # -L is critical: vibemon.dev → www.vibemon.dev is a 307 on Vercel,
+    # -L is critical: /install.sh?v is a 302 to raw.githubusercontent.com,
     # without -L curl returns "Redirecting..." and the version compare breaks.
     LATEST=$(curl -fsSL "https://vibemon.dev/install.sh?v" 2>/dev/null || true)
     local CURRENT=""

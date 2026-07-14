@@ -85,7 +85,7 @@ if [ "$EVENT_TYPE" = "session_start" ]; then
     fi
     printf '%s' "$NOW" > "$LAST_CHECK"
     local LATEST
-    # -L is critical: vibemon.dev → www.vibemon.dev is a 307 on Vercel,
+    # -L is critical: /install.sh?v is a 302 to raw.githubusercontent.com,
     # without -L curl returns "Redirecting..." and the version compare breaks.
     LATEST=$(curl -fsSL "https://vibemon.dev/install.sh?v" 2>/dev/null || true)
     local CURRENT=""
