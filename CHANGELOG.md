@@ -35,7 +35,7 @@ manual install on a dash-based distro hit this.
   (it is `build.py`), and `notify.sh`'s comment explained `-L` by the old
   apex→www redirect, which is now a 302 to the GitHub release asset.
 
-## Unreleased
+### Also in this release
 
 - **macOS GUI installer retired** (shipped v24, removed same day by
   product decision): macOS users of AI coding agents are
