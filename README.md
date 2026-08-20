@@ -48,6 +48,9 @@ A real file edit — `Edit` on `Button.tsx`, +3 lines — becomes an envelope li
   "agent": "claude_code",
   "cwd": "/Users/x/proj",
   "project_root": "user/repo",
+  "repo_identifier": "user/repo",
+  "branch": "feature/collaboration-inbox",
+  "head_sha": "0123456789abcdef...",
   "session_id": "sess-edit-1",
   "payload": { "tool_name": "Edit", "tool_input": { "file_path": ".../Button.tsx" } },
   "signals": {
@@ -69,13 +72,17 @@ The **code you wrote is not in there** — only its shape. The full signal catal
 | ✅ Sent (categories · counts · booleans) | ❌ Never sent |
 |---|---|
 | `event`, `agent`, `session_id`, `cwd`, `project_root`, timestamp, local hour/day/tz | **Code content** — `Write`/`Edit`/`NotebookEdit` bodies |
+| `repo_identifier`, current branch, HEAD SHA | **PR titles or descriptions, secrets** in any field |
 | `file.ext` · `file.depth` · `file.is_test` · `file.is_config` | **Prompt text** — only its length, bucket, language hint, `?`/```` ``` ```` presence |
 | `lines.added` · `removed` · `net` (non-blank counts) | **Bash command bodies** — only the first token + a category |
 | `bash.category` · `bash.head` (≤32 chars) · `bash.byte_len` | **Tool responses / stderr / stdout** — only the *kind* of failure |
-| `prompt.bucket` · `prompt.has_question` · `prompt.lang_hint` | **Branch names, PR titles, secrets** in any field |
+| `prompt.bucket` · `prompt.has_question` · `prompt.lang_hint` | **Git remote URLs or credentials** — repo is normalized to `owner/repo` locally |
 | `failure.kind` (e.g. `string_mismatch`) · `failure.byte_len` | |
 
-**File paths are sent in the clear** so drops match the right project. There's one deliberate exception on the "never" side ↓.
+**File paths and the current branch are sent in the clear** so activity, PRs,
+and handoffs match the right team context. Git remote URLs are reduced locally
+to `owner/repo`; no remote credential or URL is sent. There's one deliberate
+exception on the "never" side ↓.
 
 ### The one exception: commit message titles
 

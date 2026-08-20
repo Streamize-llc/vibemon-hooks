@@ -27,6 +27,9 @@ For each agent hook event, the envelope POSTed to `/hook` contains:
 | `session_id` | `"abc-123"` | Multi-session disambiguation. |
 | `cwd` | `/Users/x/proj` | Project routing. |
 | `project_root` | `"streamize/vibemon"` | Stable project key (git remote owner/repo, or basename). |
+| `repo_identifier` | `"streamize/vibemon"` | Normalized `owner/repo`; never a remote URL or credential. |
+| `branch` | `"feature/inbox"` | Match a local session to its GitHub PR and handoff context. |
+| `head_sha` | `"0123abcd…"` | Match the exact local revision to GitHub without reading a diff. |
 | `timestamp` | UTC ISO-8601 | When the hook fired. |
 | `local_hour` | `23` | Time-of-day for narrative ("nocturnal coder"). |
 | `local_dow` | `2` | Day of week. |
@@ -74,8 +77,10 @@ and to power per-project dashboards. If you don't want this, see
 - **Tool responses / stderr / stdout** — `tool_response`, `response`,
   `stderr`, `stdout`, `error` (only the *kind* of failure is sent,
   classified from a brief substring search in memory).
-- **Branch names, PR titles, secrets in any field** — none of these
-  are read by VibeMon.
+- **PR titles/descriptions, Git remote URLs, or secrets in any field** —
+  remote URLs are normalized locally to `owner/repo`; credentials and PR text
+  are never read. The current branch and HEAD SHA are metadata that are sent
+  explicitly as documented above.
 
 ### The commit message exception
 

@@ -131,6 +131,18 @@ def test_sanitize_handles_non_dict():
     assert sanitize_payload("string") == {}
 
 
+def test_envelope_includes_privacy_safe_git_context():
+    env = build_envelope(
+        "session_start", {"session_id": "s1"}, "codex_cli", "/private/work",
+        "2026-08-20T00:00:00Z", "Streamize-llc/VibeMon",
+        "Streamize-llc/VibeMon", "feature/collab", "a" * 40,
+    )
+    assert env["repo_identifier"] == "streamize-llc/vibemon"
+    assert env["branch"] == "feature/collab"
+    assert env["head_sha"] == "a" * 40
+    assert "/private/work" not in env["repo_identifier"]
+
+
 # ─── derive_signals ───────────────────────────────────────────────────
 def test_derive_write_lines():
     sig = derive_signals("activity", {

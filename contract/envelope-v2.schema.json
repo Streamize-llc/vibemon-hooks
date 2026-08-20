@@ -34,6 +34,21 @@
       "type": "string",
       "description": "Best-effort project identifier. owner/repo from git remote, or basename of git toplevel, or empty."
     },
+    "repo_identifier": {
+      "type": "string",
+      "pattern": "^[^/\\\\s]+/[^/\\\\s]+$",
+      "description": "Normalized owner/repo only when a Git remote provides it. Never an absolute path or credential-bearing URL."
+    },
+    "branch": {
+      "type": "string",
+      "maxLength": 255,
+      "description": "Current Git branch. Empty/detached HEAD is omitted."
+    },
+    "head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$",
+      "description": "Current Git HEAD object id."
+    },
     "timestamp": {
       "type": "string",
       "format": "date-time",

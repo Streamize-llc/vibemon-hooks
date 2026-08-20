@@ -110,12 +110,19 @@ if [ -n "$_url" ]; then
 elif _root=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null) && [ -n "$_root" ]; then
   PROJECT_ROOT=$(basename "$_root")
 fi
+REPO_IDENTIFIER=""
+case "$PROJECT_ROOT" in */*) REPO_IDENTIFIER="$PROJECT_ROOT" ;; esac
+GIT_BRANCH=$(git -C "$(pwd)" branch --show-current 2>/dev/null || true)
+GIT_HEAD=$(git -C "$(pwd)" rev-parse HEAD 2>/dev/null || true)
 
 # ─── Build envelope (privacy boundary lives entirely in Python) ──────
 VIBEMON_EVT="$EVENT_TYPE" \
   VIBEMON_AGENT="$AGENT" \
   VIBEMON_CWD="$(pwd)" \
   VIBEMON_ROOT="${PROJECT_ROOT:-}" \
+  VIBEMON_REPO="${REPO_IDENTIFIER:-}" \
+  VIBEMON_BRANCH="${GIT_BRANCH:-}" \
+  VIBEMON_HEAD="${GIT_HEAD:-}" \
   VIBEMON_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   VIBEMON_FILE="$STDIN_FILE" \
   VIBEMON_NO_COMMIT_MSG="$NO_COMMIT_MSG" \

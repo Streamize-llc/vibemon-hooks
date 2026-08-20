@@ -21,7 +21,7 @@ fi
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="26"
+VIBEMON_VERSION="27"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -234,12 +234,19 @@ if [ -n "$_url" ]; then
 elif _root=$(git -C "$(pwd)" rev-parse --show-toplevel 2>/dev/null) && [ -n "$_root" ]; then
   PROJECT_ROOT=$(basename "$_root")
 fi
+REPO_IDENTIFIER=""
+case "$PROJECT_ROOT" in */*) REPO_IDENTIFIER="$PROJECT_ROOT" ;; esac
+GIT_BRANCH=$(git -C "$(pwd)" branch --show-current 2>/dev/null || true)
+GIT_HEAD=$(git -C "$(pwd)" rev-parse HEAD 2>/dev/null || true)
 
 # ─── Build envelope (privacy boundary lives entirely in Python) ──────
 VIBEMON_EVT="$EVENT_TYPE" \
   VIBEMON_AGENT="$AGENT" \
   VIBEMON_CWD="$(pwd)" \
   VIBEMON_ROOT="${PROJECT_ROOT:-}" \
+  VIBEMON_REPO="${REPO_IDENTIFIER:-}" \
+  VIBEMON_BRANCH="${GIT_BRANCH:-}" \
+  VIBEMON_HEAD="${GIT_HEAD:-}" \
   VIBEMON_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   VIBEMON_FILE="$STDIN_FILE" \
   VIBEMON_NO_COMMIT_MSG="$NO_COMMIT_MSG" \
@@ -937,7 +944,10 @@ def local_time_fields():
         return (None, None, "")
 
 
-def build_envelope(event, payload, agent, cwd, timestamp, project_root=""):
+def build_envelope(
+    event, payload, agent, cwd, timestamp, project_root="",
+    repo_identifier="", branch="", head_sha="",
+):
     """Assemble the v2 envelope from raw inputs. The payload here is the
     RAW Claude Code payload (with bodies). This function sanitizes and
     derives in one place."""
@@ -974,6 +984,12 @@ def build_envelope(event, payload, agent, cwd, timestamp, project_root=""):
     }
     if project_root:
         env["project_root"] = project_root
+    if repo_identifier:
+        env["repo_identifier"] = repo_identifier.lower()
+    if branch:
+        env["branch"] = branch
+    if head_sha:
+        env["head_sha"] = head_sha
     if sid:
         env["session_id"] = sid
     if local_hour is not None:
@@ -1002,10 +1018,16 @@ def main():
     cwd = os.environ.get("VIBEMON_CWD", "")
     timestamp = os.environ.get("VIBEMON_TS", "")
     project_root = os.environ.get("VIBEMON_ROOT", "")
+    repo_identifier = os.environ.get("VIBEMON_REPO", "")
+    branch = os.environ.get("VIBEMON_BRANCH", "")
+    head_sha = os.environ.get("VIBEMON_HEAD", "")
     file_path = os.environ.get("VIBEMON_FILE", "")
 
     payload = _read_stdin_json(file_path) if file_path else {}
-    env = build_envelope(event, payload, agent, cwd, timestamp, project_root)
+    env = build_envelope(
+        event, payload, agent, cwd, timestamp, project_root,
+        repo_identifier, branch, head_sha,
+    )
     sys.stdout.write(json.dumps(env, ensure_ascii=False))
 
 

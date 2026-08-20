@@ -113,6 +113,7 @@ def _build_both(fixture_path, event, monkeypatch):
                 cwd=shared_cwd,
                 timestamp="<redacted>",
                 project_root="user/repo",
+                repo_identifier="user/repo",
             )
         finally:
             os.chdir(original_cwd)
@@ -158,6 +159,7 @@ def test_envelope_parity_against_subprocess_extract(fixtures_dir, monkeypatch):
         "VIBEMON_AGENT": "claude_code",
         "VIBEMON_CWD": py_envelope.get("cwd", os.getcwd()),
         "VIBEMON_ROOT": "user/repo",
+        "VIBEMON_REPO": "user/repo",
         "VIBEMON_TS": "<redacted>",
         "VIBEMON_FILE": fixture_path,
         "PYTHONIOENCODING": "utf-8",

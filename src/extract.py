@@ -316,7 +316,10 @@ def local_time_fields():
         return (None, None, "")
 
 
-def build_envelope(event, payload, agent, cwd, timestamp, project_root=""):
+def build_envelope(
+    event, payload, agent, cwd, timestamp, project_root="",
+    repo_identifier="", branch="", head_sha="",
+):
     """Assemble the v2 envelope from raw inputs. The payload here is the
     RAW Claude Code payload (with bodies). This function sanitizes and
     derives in one place."""
@@ -353,6 +356,12 @@ def build_envelope(event, payload, agent, cwd, timestamp, project_root=""):
     }
     if project_root:
         env["project_root"] = project_root
+    if repo_identifier:
+        env["repo_identifier"] = repo_identifier.lower()
+    if branch:
+        env["branch"] = branch
+    if head_sha:
+        env["head_sha"] = head_sha
     if sid:
         env["session_id"] = sid
     if local_hour is not None:
@@ -381,10 +390,16 @@ def main():
     cwd = os.environ.get("VIBEMON_CWD", "")
     timestamp = os.environ.get("VIBEMON_TS", "")
     project_root = os.environ.get("VIBEMON_ROOT", "")
+    repo_identifier = os.environ.get("VIBEMON_REPO", "")
+    branch = os.environ.get("VIBEMON_BRANCH", "")
+    head_sha = os.environ.get("VIBEMON_HEAD", "")
     file_path = os.environ.get("VIBEMON_FILE", "")
 
     payload = _read_stdin_json(file_path) if file_path else {}
-    env = build_envelope(event, payload, agent, cwd, timestamp, project_root)
+    env = build_envelope(
+        event, payload, agent, cwd, timestamp, project_root,
+        repo_identifier, branch, head_sha,
+    )
     sys.stdout.write(json.dumps(env, ensure_ascii=False))
 
 

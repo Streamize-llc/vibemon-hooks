@@ -276,13 +276,19 @@ def _fire(event, agent, payload):
     cwd = os.getcwd()
     ts = _utc_iso()
     project_root = _detect_project_root()
+    repo_identifier = project_root if "/" in project_root else ""
+    branch = _git(["branch", "--show-current"])
+    head_sha = _git(["rev-parse", "HEAD"])
 
     # Honor user opt-out via ~/.vibemon/config
     cfg = _read_config()
     if cfg.get("no_commit_msg") == "1":
         os.environ["VIBEMON_NO_COMMIT_MSG"] = "1"
 
-    env = build_envelope(event, payload, agent, cwd, ts, project_root)
+    env = build_envelope(
+        event, payload, agent, cwd, ts, project_root,
+        repo_identifier, branch, head_sha,
+    )
     body = json.dumps(env, ensure_ascii=False).encode("utf-8")
 
     api_key = _read_text(os.path.join(_vibemon_dir(), "api-key"))
