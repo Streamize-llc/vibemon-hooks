@@ -178,7 +178,12 @@ def derive_signals(event, payload):
     if not isinstance(payload, dict):
         return sig
 
+    # Gemini CLI sends the arguments as `tool_args`, not `tool_input` — same
+    # shape, different key. Read whichever is present so shell classification
+    # and line counts work for both.
     ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else None
+    if ti is None and isinstance(payload.get("tool_args"), dict):
+        ti = payload.get("tool_args")
     tn = (payload.get("tool_name") or payload.get("tool") or "").lower()
 
     # Lines added/removed
@@ -213,7 +218,7 @@ def derive_signals(event, payload):
     # Bash classification — body discarded, only category + head + length.
     # Exception: git commit messages (title only, first line, 200 char cap)
     # are captured by default. Opt out with VIBEMON_NO_COMMIT_MSG=1.
-    if ti and tn in ("bash", "shell", "run_command"):
+    if ti and tn in ("bash", "shell", "run_command", "run_shell_command"):
         cmd = ti.get("command") or ti.get("script") or ""
         if isinstance(cmd, str) and cmd:
             cat = classify_bash(cmd)

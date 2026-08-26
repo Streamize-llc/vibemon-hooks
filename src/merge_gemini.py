@@ -29,6 +29,19 @@ def _build_hooks(notify_prefix):
                     "timeout": 5000,
                 }],
             },
+            # Shell runs are observation-only (`bash` event, no XP) — same
+            # economy as Claude Code's Bash. Without this matcher, Gemini
+            # users have no commits, no bash categories and understated
+            # coding time (the tool_use+bash invariant).
+            {
+                "matcher": "run_shell_command",
+                "hooks": [{
+                    "name": "vibemon-shell",
+                    "type": "command",
+                    "command": "%s bash gemini_cli" % notify_prefix,
+                    "timeout": 5000,
+                }],
+            },
         ],
         "SessionStart": [
             {"hooks": [{
@@ -88,7 +101,19 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
                 try:
                     settings = json.load(f)
                 except json.JSONDecodeError:
-                    settings = {}
+                    # Don't clobber a file we don't own — skip and say so.
+                    print(
+                        f"  ⚠ Could not parse {settings_path}; skipping Gemini CLI hook registration.",
+                        file=sys.stderr,
+                    )
+                    return False
+
+        if not isinstance(settings, dict):
+            print(
+                f"  ⚠ {settings_path} is not a JSON object; skipping Gemini CLI hook registration.",
+                file=sys.stderr,
+            )
+            return False
 
         hooks = settings.setdefault("hooks", {})
         for event_name, new_entries in hooks_def.items():

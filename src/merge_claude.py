@@ -33,7 +33,7 @@ def _build_hooks(notify_prefix):
     return {
         "PostToolUse": [
             {
-                "matcher": "Edit|Write|NotebookEdit",
+                "matcher": "Edit|Write|NotebookEdit|Task",
                 "hooks": [{"type": "command", "command": "%s activity claude_code" % notify_prefix}],
             },
             {
@@ -61,7 +61,7 @@ def _build_hooks(notify_prefix):
         ],
         "PostToolUseFailure": [
             {
-                "matcher": "Edit|Write|NotebookEdit",
+                "matcher": "Edit|Write|NotebookEdit|Task",
                 "hooks": [{"type": "command", "command": "%s tool_failure claude_code" % notify_prefix}],
             },
             # Bash failures (failed tests / broken builds / deploy errors) are the
@@ -111,7 +111,19 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
                 try:
                     settings = json.load(f)
                 except json.JSONDecodeError:
-                    settings = {}
+                    # Don't clobber a file we don't own — skip and say so.
+                    print(
+                        f"  ⚠ Could not parse {settings_path}; skipping Claude Code hook registration.",
+                        file=sys.stderr,
+                    )
+                    return False
+
+        if not isinstance(settings, dict):
+            print(
+                f"  ⚠ {settings_path} is not a JSON object; skipping Claude Code hook registration.",
+                file=sys.stderr,
+            )
+            return False
 
         hooks = settings.setdefault("hooks", {})
 

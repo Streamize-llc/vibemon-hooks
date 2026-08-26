@@ -56,7 +56,12 @@ def merge(hooks_path, notify_prefix=None, hooks_def=None):
                 try:
                     config = json.load(f)
                 except json.JSONDecodeError:
-                    config = {}
+                    # Don't clobber a file we don't own — skip and say so.
+                    print(
+                        f"  ⚠ Could not parse {hooks_path}; skipping Cursor hook registration.",
+                        file=sys.stderr,
+                    )
+                    return False
 
         hooks = config.setdefault("hooks", {})
         for event_name, new_entries in hooks_def.items():

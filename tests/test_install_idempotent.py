@@ -131,16 +131,34 @@ def test_codex_merge_idempotent():
         assert first == _read(path)
 
 
-def test_corrupt_settings_treated_as_empty():
-    """If settings.json is malformed JSON, mergers should overwrite, not crash."""
+def test_corrupt_settings_is_left_alone():
+    """A settings.json we cannot parse belongs to the agent, not to us.
+
+    Overwriting it replaces the user's permissions, model, statusLine, plugins
+    and every other tool's hooks with our own block, silently and with no
+    backup — and this path runs unattended on the daily auto-update. Skip
+    instead, and say so on stderr (same policy as merge_mcp.py).
+    """
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "settings.json")
+        original = '{ this is not json'
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(original)
+        result = merge_claude(path)
+        assert result is False
+        with open(path, "r", encoding="utf-8") as f:
+            assert f.read() == original, "an unparseable settings.json must be left byte-identical"
+
+
+def test_non_object_settings_is_left_alone():
+    """Valid JSON that is not an object is the same hazard."""
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "settings.json")
         with open(path, "w", encoding="utf-8") as f:
-            f.write("{ this is not json")
-        merge_claude(path)
-        # Should not throw; result should be valid
-        s = _read(path)
-        assert "hooks" in s
+            f.write('["not", "an", "object"]')
+        assert merge_claude(path) is False
+        with open(path, "r", encoding="utf-8") as f:
+            assert f.read() == '["not", "an", "object"]'
 
 
 # ─── Windows-style notify_prefix tests ─────────────────────────────

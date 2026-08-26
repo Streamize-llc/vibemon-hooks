@@ -728,3 +728,27 @@ def test_derive_signals_opt_out_blocks_heredoc_commit_message(monkeypatch):
     sig = derive_signals("activity", payload)
     assert sig["bash.category"] == "git.commit"
     assert "commit.message" not in sig
+
+
+# ─── Gemini CLI field-name parity (v28) ──────────────────────────────
+
+def test_gemini_run_shell_command_classifies_via_tool_args():
+    """Gemini sends `tool_args`, not `tool_input`, and names the tool
+    run_shell_command. Both must reach the bash classifier — without this,
+    Gemini users have no commits, no bash categories and understated
+    coding time."""
+    sig = derive_signals("bash", {
+        "tool_name": "run_shell_command",
+        "tool_args": {"command": "git commit -m 'fix: retry with backoff'"},
+    })
+    assert sig.get("bash.category") == "git.commit"
+    assert sig.get("commit.message") == "fix: retry with backoff"
+
+
+def test_tool_input_still_wins_over_tool_args():
+    sig = derive_signals("bash", {
+        "tool_name": "bash",
+        "tool_input": {"command": "npm test"},
+        "tool_args": {"command": "rm -rf /"},
+    })
+    assert sig.get("bash.category") in ("pkg.test", "test.run")

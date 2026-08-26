@@ -26,7 +26,8 @@ HEREDOCS = [
 
 
 def _extract_heredoc(src, marker):
-    pat = rf"<< '{marker}'\n(.*?)\n{marker}"
+    # trailing shell after the heredoc start (e.g. `|| true`) is legal syntax
+    pat = rf"<< '{marker}'[^\n]*\n(.*?)\n{marker}"
     m = re.search(pat, src, re.DOTALL)
     if not m:
         return None

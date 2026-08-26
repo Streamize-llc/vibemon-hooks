@@ -21,7 +21,7 @@ fi
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="27"
+VIBEMON_VERSION="28"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -250,7 +250,10 @@ VIBEMON_EVT="$EVENT_TYPE" \
   VIBEMON_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   VIBEMON_FILE="$STDIN_FILE" \
   VIBEMON_NO_COMMIT_MSG="$NO_COMMIT_MSG" \
-  python3 > "$ENV_FILE" 2>/dev/null << 'VIBEMON_PY'
+  # || true: under set -e a broken python3 (pyenv shim, removed CLT) would
+  # otherwise kill the script right here, making the empty-envelope fallback
+  # below unreachable dead code.
+  python3 > "$ENV_FILE" 2>/dev/null << 'VIBEMON_PY' || true
 """
 classify.py — Bash command classifier for VibeMon hook events.
 
@@ -806,7 +809,12 @@ def derive_signals(event, payload):
     if not isinstance(payload, dict):
         return sig
 
+    # Gemini CLI sends the arguments as `tool_args`, not `tool_input` — same
+    # shape, different key. Read whichever is present so shell classification
+    # and line counts work for both.
     ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else None
+    if ti is None and isinstance(payload.get("tool_args"), dict):
+        ti = payload.get("tool_args")
     tn = (payload.get("tool_name") or payload.get("tool") or "").lower()
 
     # Lines added/removed
@@ -841,7 +849,7 @@ def derive_signals(event, payload):
     # Bash classification — body discarded, only category + head + length.
     # Exception: git commit messages (title only, first line, 200 char cap)
     # are captured by default. Opt out with VIBEMON_NO_COMMIT_MSG=1.
-    if ti and tn in ("bash", "shell", "run_command"):
+    if ti and tn in ("bash", "shell", "run_command", "run_shell_command"):
         cmd = ti.get("command") or ti.get("script") or ""
         if isinstance(cmd, str) and cmd:
             cat = classify_bash(cmd)
@@ -1042,7 +1050,7 @@ fi
 
 if [ "$EVENT_TYPE" = "test" ]; then
   # Synchronous — connection probe.
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/hook" \
+  HTTP_CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" -X POST "$API_URL/hook" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" \
     -H "X-Vibemon-Version: $VIBEMON_VER" \
@@ -1057,7 +1065,11 @@ else
   # Fire-and-forget. disown + </dev/null prevents SIGHUP loss when the
   # parent agent process exits right after firing the hook (critical for
   # session_end which fires immediately before the agent disappears).
-  (curl -s -X POST "$API_URL/hook" \
+  # nohup: disown only stops bash from forwarding HUP — the child keeps the
+  # parent's process group, so a closing terminal still kills an in-flight
+  # curl (measured). nohup makes curl ignore HUP outright, which is what
+  # session_end needs: it fires at the exact moment the terminal goes away.
+  (nohup curl -s --max-time 15 -X POST "$API_URL/hook" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" \
     -H "X-Vibemon-Version: $VIBEMON_VER" \
@@ -1176,7 +1188,7 @@ def _build_hooks(notify_prefix):
     return {
         "PostToolUse": [
             {
-                "matcher": "Edit|Write|NotebookEdit",
+                "matcher": "Edit|Write|NotebookEdit|Task",
                 "hooks": [{"type": "command", "command": "%s activity claude_code" % notify_prefix}],
             },
             {
@@ -1204,7 +1216,7 @@ def _build_hooks(notify_prefix):
         ],
         "PostToolUseFailure": [
             {
-                "matcher": "Edit|Write|NotebookEdit",
+                "matcher": "Edit|Write|NotebookEdit|Task",
                 "hooks": [{"type": "command", "command": "%s tool_failure claude_code" % notify_prefix}],
             },
             # Bash failures (failed tests / broken builds / deploy errors) are the
@@ -1254,7 +1266,19 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
                 try:
                     settings = json.load(f)
                 except json.JSONDecodeError:
-                    settings = {}
+                    # Don't clobber a file we don't own — skip and say so.
+                    print(
+                        f"  ⚠ Could not parse {settings_path}; skipping Claude Code hook registration.",
+                        file=sys.stderr,
+                    )
+                    return False
+
+        if not isinstance(settings, dict):
+            print(
+                f"  ⚠ {settings_path} is not a JSON object; skipping Claude Code hook registration.",
+                file=sys.stderr,
+            )
+            return False
 
         hooks = settings.setdefault("hooks", {})
 
@@ -1385,6 +1409,19 @@ def _build_hooks(notify_prefix):
                     "timeout": 5000,
                 }],
             },
+            # Shell runs are observation-only (`bash` event, no XP) — same
+            # economy as Claude Code's Bash. Without this matcher, Gemini
+            # users have no commits, no bash categories and understated
+            # coding time (the tool_use+bash invariant).
+            {
+                "matcher": "run_shell_command",
+                "hooks": [{
+                    "name": "vibemon-shell",
+                    "type": "command",
+                    "command": "%s bash gemini_cli" % notify_prefix,
+                    "timeout": 5000,
+                }],
+            },
         ],
         "SessionStart": [
             {"hooks": [{
@@ -1444,7 +1481,19 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
                 try:
                     settings = json.load(f)
                 except json.JSONDecodeError:
-                    settings = {}
+                    # Don't clobber a file we don't own — skip and say so.
+                    print(
+                        f"  ⚠ Could not parse {settings_path}; skipping Gemini CLI hook registration.",
+                        file=sys.stderr,
+                    )
+                    return False
+
+        if not isinstance(settings, dict):
+            print(
+                f"  ⚠ {settings_path} is not a JSON object; skipping Gemini CLI hook registration.",
+                file=sys.stderr,
+            )
+            return False
 
         hooks = settings.setdefault("hooks", {})
         for event_name, new_entries in hooks_def.items():
@@ -1602,7 +1651,12 @@ def merge(hooks_path, notify_prefix=None, hooks_def=None):
                 try:
                     config = json.load(f)
                 except json.JSONDecodeError:
-                    config = {}
+                    # Don't clobber a file we don't own — skip and say so.
+                    print(
+                        f"  ⚠ Could not parse {hooks_path}; skipping Cursor hook registration.",
+                        file=sys.stderr,
+                    )
+                    return False
 
         hooks = config.setdefault("hooks", {})
         for event_name, new_entries in hooks_def.items():
@@ -1760,7 +1814,19 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
                 try:
                     settings = json.load(f)
                 except json.JSONDecodeError:
-                    settings = {}
+                    # Don't clobber a file we don't own — skip and say so.
+                    print(
+                        f"  ⚠ Could not parse {settings_path}; skipping Codex CLI hook registration.",
+                        file=sys.stderr,
+                    )
+                    return False
+
+        if not isinstance(settings, dict):
+            print(
+                f"  ⚠ {settings_path} is not a JSON object; skipping Codex CLI hook registration.",
+                file=sys.stderr,
+            )
+            return False
 
         hooks = settings.setdefault("hooks", {})
         for event_name, new_entries in hooks_def.items():

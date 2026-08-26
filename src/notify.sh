@@ -126,7 +126,10 @@ VIBEMON_EVT="$EVENT_TYPE" \
   VIBEMON_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   VIBEMON_FILE="$STDIN_FILE" \
   VIBEMON_NO_COMMIT_MSG="$NO_COMMIT_MSG" \
-  python3 > "$ENV_FILE" 2>/dev/null << 'VIBEMON_PY'
+  # || true: under set -e a broken python3 (pyenv shim, removed CLT) would
+  # otherwise kill the script right here, making the empty-envelope fallback
+  # below unreachable dead code.
+  python3 > "$ENV_FILE" 2>/dev/null << 'VIBEMON_PY' || true
 # %%EMBED:classify.py%%
 # %%EMBED:extract.py%%
 VIBEMON_PY
@@ -138,7 +141,7 @@ fi
 
 if [ "$EVENT_TYPE" = "test" ]; then
   # Synchronous — connection probe.
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_URL/hook" \
+  HTTP_CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" -X POST "$API_URL/hook" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" \
     -H "X-Vibemon-Version: $VIBEMON_VER" \
@@ -153,7 +156,11 @@ else
   # Fire-and-forget. disown + </dev/null prevents SIGHUP loss when the
   # parent agent process exits right after firing the hook (critical for
   # session_end which fires immediately before the agent disappears).
-  (curl -s -X POST "$API_URL/hook" \
+  # nohup: disown only stops bash from forwarding HUP — the child keeps the
+  # parent's process group, so a closing terminal still kills an in-flight
+  # curl (measured). nohup makes curl ignore HUP outright, which is what
+  # session_end needs: it fires at the exact moment the terminal goes away.
+  (nohup curl -s --max-time 15 -X POST "$API_URL/hook" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" \
     -H "X-Vibemon-Version: $VIBEMON_VER" \
