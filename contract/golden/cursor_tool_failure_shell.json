@@ -1,0 +1,27 @@
+{
+  "agent": "cursor",
+  "cwd": "/Users/x/proj",
+  "event": "tool_failure",
+  "payload": {
+    "duration": 30000,
+    "hook_event_name": "postToolUseFailure",
+    "is_interrupt": false,
+    "project_root": "user/repo",
+    "session_id": "conv-cursor-1",
+    "tool_input": {},
+    "tool_name": "Shell",
+    "tool_use_id": "tu-1"
+  },
+  "project_root": "user/repo",
+  "session_id": "conv-cursor-1",
+  "signals": {
+    "bash.byte_len": 8,
+    "bash.category": "pkg.test",
+    "bash.head": "npm",
+    "failure.byte_len": 27,
+    "failure.kind": "timeout",
+    "tool.duration_ms": 30000,
+    "tool.name": "shell"
+  },
+  "v": 2
+}

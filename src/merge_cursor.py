@@ -2,7 +2,24 @@
 merge_cursor.py — Merge VibeMon hooks into ~/.cursor/hooks.json.
 
 Cursor's hook config is shallower than Claude/Gemini: each event maps
-directly to a list of {command, timeout} entries with no nested 'hooks' array.
+directly to a list of {command, timeout} entries with no nested 'hooks'
+array, plus a top-level "version": 1.
+
+v29 rewired the events against Cursor's real hook surface (ground truth:
+a hand-wired working hooks.json + the official hooks docs). The old
+config registered `afterFileCreate` — an event Cursor does not have —
+and used timeout 5000, copy-pasted from Gemini's milliseconds. Cursor
+timeouts are SECONDS (5000 = 83 minutes). Result: zero production
+events had ever arrived through this wiring.
+
+Event map (cursor event → vibemon event):
+  sessionStart        → session_start
+  sessionEnd          → session_end
+  beforeSubmitPrompt  → prompt
+  stop                → stop
+  afterFileEdit       → activity
+  afterShellExecution → bash
+  postToolUseFailure  → tool_failure
 
 Uses an exclusive FileLock + tempfile.mkstemp + os.replace for safety
 against concurrent install.sh / install.ps1 runs from multiple AI
@@ -25,15 +42,33 @@ except ImportError:
 
 DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
 
+# Seconds, not milliseconds (Cursor docs; the working hand-wired config
+# on record uses 10). Keep small: hooks fire on every edit/shell run.
+CURSOR_TIMEOUT_S = 10
+
+# cursor event name → vibemon event name. This dict is the single source
+# the merge builds from; tests/test_merge_events.py pins it so a ghost
+# event (afterFileCreate…) can never come back.
+EVENT_MAP = {
+    "sessionStart": "session_start",
+    "sessionEnd": "session_end",
+    "beforeSubmitPrompt": "prompt",
+    "stop": "stop",
+    "afterFileEdit": "activity",
+    "afterShellExecution": "bash",
+    "postToolUseFailure": "tool_failure",
+}
+
 
 def _build_hooks(notify_prefix):
     return {
-        "afterFileEdit": [
-            {"command": "%s activity cursor" % notify_prefix, "timeout": 5000},
-        ],
-        "afterFileCreate": [
-            {"command": "%s activity cursor" % notify_prefix, "timeout": 5000},
-        ],
+        cursor_event: [
+            {
+                "command": "%s %s cursor" % (notify_prefix, vibemon_event),
+                "timeout": CURSOR_TIMEOUT_S,
+            },
+        ]
+        for cursor_event, vibemon_event in EVENT_MAP.items()
     }
 
 
@@ -63,13 +98,36 @@ def merge(hooks_path, notify_prefix=None, hooks_def=None):
                     )
                     return False
 
+        if not isinstance(config, dict):
+            print(
+                f"  ⚠ {hooks_path} is not a JSON object; skipping Cursor hook registration.",
+                file=sys.stderr,
+            )
+            return False
+
         hooks = config.setdefault("hooks", {})
+
+        # Sweep vibemon entries from EVERY event first — not just the ones
+        # we register. This is what removes the v28 ghost (`afterFileCreate`)
+        # on upgrade instead of leaving it behind forever.
+        for event_name in list(hooks.keys()):
+            entries = hooks.get(event_name)
+            if not isinstance(entries, list):
+                continue
+            kept = [e for e in entries if not (isinstance(e, dict) and _is_vibemon_entry(e))]
+            if kept:
+                hooks[event_name] = kept
+            else:
+                del hooks[event_name]
+
         for event_name, new_entries in hooks_def.items():
             existing = hooks.get(event_name, [])
-            existing = [e for e in existing if not _is_vibemon_entry(e)]
             existing.extend(new_entries)
             hooks[event_name] = existing
         config["hooks"] = hooks
+        # Cursor's schema carries a top-level version; write it on fresh
+        # files, preserve whatever an existing file declares.
+        config.setdefault("version", 1)
 
         dir_path = os.path.dirname(hooks_path) or "."
         fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".hooks.", suffix=".tmp")

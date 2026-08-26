@@ -1,5 +1,71 @@
 # Changelog
 
+## v29 — 2026-08-26
+
+The collection layer now matches the advertising: Cursor and Codex
+integrations are made real, install gates and probes are made honest.
+
+### Cursor — rewired against ground truth (was: zero events, ever)
+- v28 registered `afterFileCreate` — an event Cursor does not have — and
+  `afterFileEdit` payloads carry no `tool_name`, so the server's activity
+  gate 400'd every event that did fire. Production events through the
+  installed wiring: **0**.
+- New wiring (`merge_cursor.py`): sessionStart/sessionEnd/
+  beforeSubmitPrompt/stop/afterFileEdit/afterShellExecution/
+  postToolUseFailure → session_start/session_end/prompt/stop/activity/
+  bash/tool_failure. Timeouts are **seconds** (10), not the copy-pasted
+  Gemini milliseconds (5000 = 83 minutes). Upgrades sweep vibemon entries
+  from every event, so the ghost dies on the next auto-update.
+- Client-side payload normalization (`extract.py`): `tool_name` is
+  synthesized from `hook_event_name` (server untouched), top-level
+  `file_path`/`command` are lifted into `tool_input`, `conversation_id`
+  maps to the envelope `session_id`, and `afterFileEdit.edits[]` bodies
+  are counted into lines.added/removed then discarded (two new privacy
+  canaries pin the discard; Cursor's `output`/`user_email`/`prompt`
+  bodies never pass the allowlist).
+
+### Codex — honest now (was: writing a file Codex never reads)
+- `merge_codex.py` writes `~/.codex/hooks.json` (the file Codex actually
+  reads) in the required nested shape (`type: "command"` mandatory),
+  events SessionStart/SessionEnd/UserPromptSubmit/Stop/PostToolUse
+  (matchers `Edit|Write|apply_patch` → activity, `Bash|shell` → bash).
+  The stale vibemon entries in `~/.codex/settings.json` are scrubbed on
+  upgrade; user content there is untouched.
+- Codex gates new hooks behind in-app approval (`/hooks`), and the
+  trusted-hash registry is Codex-internal — we do NOT auto-approve. The
+  installer now says "written — run codex, then /hooks, and trust the
+  vibemon entries", instead of the false "configured".
+
+### Installer
+- **Gate-order fix**: agent presence (HAS_CLAUDE/GEMINI/CURSOR/CODEX) is
+  snapshotted BEFORE any `mkdir -p` — v28's `[ -d ~/.claude ]` MCP gate
+  ran after 5a's mkdir had created the directory, so it always passed.
+- **Per-agent install probes**: `notify.sh test <agent>` fires for every
+  configured agent (claude_code strict; gemini_cli/cursor/codex_cli
+  best-effort + quiet), so `script_install_status` finally learns all
+  wired agents instead of only claude_code.
+- **Gemini MCP registration**: `mcpServers.vibemon` with `httpUrl`
+  (Gemini's streamable-HTTP field; its `url` means SSE) merged into
+  `~/.gemini/settings.json`. `merge_mcp.py` grew a `gemini` kind.
+- **Codex MCP descoped, deliberately**: `[mcp_servers]` lives in
+  `~/.codex/config.toml` — TOML (stdlib reads it, cannot write it) and
+  Codex's primary config holding trust hashes. A hand-rolled writer
+  risking that file loses to one manual step; the installer prints the
+  manual hint instead.
+
+### Tests & docs
+- `tests/test_merge_events.py` pins the full registered-event set of all
+  four merges (ghost events can't return), Cursor's flat/seconds shape,
+  Codex's nested shape + hooks.json target + legacy scrub.
+- `tests/test_server_contract.py` mirrors the server's activity 400 gate
+  client-side and pins the conversation_id → session_id mapping.
+- Real-payload fixtures + goldens for cursor (edit/shell/prompt/stop/
+  failure), gemini (`tool_args`), codex; existing Claude goldens are
+  byte-identical (the Claude path did not move).
+- SIGNALS.md drift fixed: `commit.message`, `tool.duration_ms`,
+  `tool.duration_unavailable` documented; `bash.head` described as it
+  actually behaves (env-assignment skipping, `<env>`, 32-char cap).
+
 ## v26 — 2026-07-15
 
 The installer requires bash, and now says so.

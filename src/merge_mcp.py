@@ -1,7 +1,8 @@
-"""Add the VibeMon HTTP MCP server to a Claude / Cursor config JSON.
+"""Add the VibeMon HTTP MCP server to a Claude / Cursor / Gemini config JSON.
 
-Both Claude Code (~/.claude.json) and Cursor (~/.cursor/mcp.json) keep a top-level
-`mcpServers` object whose keys are MCP server names. We merge our entry idempotently:
+Claude Code (~/.claude.json), Cursor (~/.cursor/mcp.json) and Gemini CLI
+(~/.gemini/settings.json) all keep a top-level `mcpServers` object whose keys
+are MCP server names. We merge our entry idempotently:
 
   {
     "mcpServers": {
@@ -14,7 +15,7 @@ Both Claude Code (~/.claude.json) and Cursor (~/.cursor/mcp.json) keep a top-lev
     }
   }
 
-Usage (inside install.sh): `python3 - <target.json> <api_key> [claude|cursor]`
+Usage (inside install.sh): `python3 - <target.json> <api_key> [claude|cursor|gemini]`
 
 Shape per target:
   - claude: {"type": "http", "url", "headers"} — exactly what
@@ -22,6 +23,14 @@ Shape per target:
   - cursor: {"url", "headers"} — Cursor's docs define remote servers by `url`
     alone (its `type` enum is for stdio), so we omit the field rather than
     feed an undocumented value to a possibly strict parser.
+  - gemini: {"httpUrl", "headers"} — Gemini CLI's docs use `httpUrl` for the
+    streamable-HTTP transport (`url` there means SSE), headers as an object.
+
+(Codex CLI is intentionally absent: its MCP registry is `[mcp_servers]` in
+~/.codex/config.toml — TOML, which the stdlib can read but not write, in
+Codex's PRIMARY config file holding trust hashes and project state. A
+hand-rolled TOML writer corrupting that file is a worse outcome than asking
+for one manual step, so the installer prints a manual hint instead.)
 
 The script is idempotent — re-running with the same args is a no-op (apart from
 updating the Authorization header when the API key rotates). The targets are
@@ -50,11 +59,24 @@ except ImportError:
 
 MCP_URL = "https://vibemon.dev/api/mcp"
 
+# Per-target entry shapes — see module docstring for the doc citations.
+KINDS = ("claude", "cursor", "gemini")
 
-def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
+
+def _desired_entry(api_key: str, kind: str) -> dict:
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if kind == "gemini":
+        return {"httpUrl": MCP_URL, "headers": headers}
+    if kind == "cursor":
+        return {"url": MCP_URL, "headers": headers}
+    return {"type": "http", "url": MCP_URL, "headers": headers}
+
+
+def merge(target_path: str, api_key: str, kind: str = "claude") -> bool:
     """Insert/update the vibemon entry. Returns True if the file changed.
 
-    include_type=False writes the Cursor shape (url + headers, no "type").
+    kind selects the entry shape: "claude" (type+url+headers),
+    "cursor" (url+headers), "gemini" (httpUrl+headers).
     """
     target_dir = os.path.dirname(target_path) or "."
     os.makedirs(target_dir, exist_ok=True)
@@ -84,12 +106,7 @@ def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
             return False
 
         existing = servers.get("vibemon")
-        desired = {
-            "url": MCP_URL,
-            "headers": {"Authorization": f"Bearer {api_key}"},
-        }
-        if include_type:
-            desired = {"type": "http", **desired}
+        desired = _desired_entry(api_key, kind)
 
         if existing == desired:
             return False  # already up to date
@@ -115,15 +132,18 @@ def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
 
 def main() -> int:
     if len(sys.argv) < 3:
-        print("usage: merge_mcp.py <target_path> <api_key> [claude|cursor]", file=sys.stderr)
+        print("usage: merge_mcp.py <target_path> <api_key> [claude|cursor|gemini]", file=sys.stderr)
         return 2
     target_path = sys.argv[1]
     api_key = sys.argv[2]
     kind = sys.argv[3] if len(sys.argv) > 3 else "claude"
+    if kind not in KINDS:
+        print(f"  ⚠ Unknown MCP target kind {kind!r}; skipping MCP registration.", file=sys.stderr)
+        return 0
     if not api_key.startswith("vbm_"):
         print("  ⚠ API key does not start with 'vbm_'; skipping MCP registration.", file=sys.stderr)
         return 0
-    changed = merge(target_path, api_key, include_type=(kind != "cursor"))
+    changed = merge(target_path, api_key, kind=kind)
     if changed:
         print(f"  ✓ MCP server 'vibemon' registered in {target_path}")
     else:

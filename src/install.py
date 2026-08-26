@@ -17,6 +17,8 @@ for the D2 design (zero impact on existing Linux/macOS users).
 Stdlib only.
 """
 
+import contextlib
+import io
 import os
 import shutil
 import sys
@@ -142,35 +144,71 @@ def main(argv=None):
     # spaces in user names ('C:\\Users\\Jane Doe\\...') don't break.
     notify_prefix = paths.notify_command(launcher)
 
+    # Agent presence snapshot — taken BEFORE any merge below creates the
+    # very directories these checks probe (v29: merge_claude's makedirs
+    # created ~/.claude, so a post-merge check was always true and
+    # Claude-less machines got MCP registrations for a missing agent).
+    has_claude = _has("claude", ".claude")
+    has_gemini = _has("gemini", ".gemini")
+    has_cursor = _has("cursor", ".cursor")
+    has_codex = _has("codex", ".codex")
+
     merge_claude(paths.claude_settings(), notify_prefix=notify_prefix)
     print("  ✓ Claude Code hooks configured (%s)" % paths.claude_settings())
 
     merge_gemini(paths.gemini_settings(), notify_prefix=notify_prefix)
     print("  ✓ Gemini CLI hooks configured (%s)" % paths.gemini_settings())
 
-    if _has("cursor", ".cursor"):
+    if has_cursor:
         merge_cursor(paths.cursor_hooks(), notify_prefix=notify_prefix)
         print("  ✓ Cursor hooks configured (%s)" % paths.cursor_hooks())
 
-    if _has("codex", ".codex"):
-        merge_codex(paths.codex_settings(), notify_prefix=notify_prefix)
-        print("  ✓ Codex CLI hooks configured (%s)" % paths.codex_settings())
+    if has_codex:
+        merge_codex(paths.codex_hooks(), notify_prefix=notify_prefix)
+        # Honest wording: Codex skips new hooks until the user trusts them.
+        print("  ✓ Codex CLI hooks written (%s)" % paths.codex_hooks())
+        print("    ⚠ Codex requires approval: run `codex`, then `/hooks`, and trust")
+        print("      the vibemon entries to enable them.")
 
     # MCP registration (Phase 2) — mirrors install.sh section 5e. Claude Code
-    # gets the {"type":"http",…} user-scope shape; Cursor gets url+headers only.
+    # gets the {"type":"http",…} user-scope shape; Cursor url+headers only;
+    # Gemini httpUrl+headers. Codex is manual (TOML — see merge_mcp docstring).
     if api_key.startswith("vbm_"):
-        if _has("claude", ".claude"):
+        if has_claude:
             merge_mcp(paths.claude_mcp_config(), api_key)
             print("  ✓ MCP server 'vibemon' registered (%s)" % paths.claude_mcp_config())
-        if _has("cursor", ".cursor"):
-            merge_mcp(paths.cursor_mcp_config(), api_key, include_type=False)
+        if has_cursor:
+            merge_mcp(paths.cursor_mcp_config(), api_key, kind="cursor")
             print("  ✓ MCP server 'vibemon' registered (%s)" % paths.cursor_mcp_config())
+        if has_gemini:
+            merge_mcp(paths.gemini_settings(), api_key, kind="gemini")
+            print("  ✓ MCP server 'vibemon' registered (%s)" % paths.gemini_settings())
 
     print("")
     print("🔗 Testing connection…")
     rc = notify._fire("test", "claude_code", {})
     if rc != 0:
         return rc
+
+    # Per-agent install probes (v29) — one script_install_status row per
+    # configured agent, so the server knows WHICH agents this machine
+    # wired (previously only claude_code was ever recorded). Best-effort:
+    # a probe hiccup must not fail an otherwise-good install.
+    probe_agents = ["gemini_cli"]
+    if has_cursor:
+        probe_agents.append("cursor")
+    if has_codex:
+        probe_agents.append("codex_cli")
+    for probe_agent in probe_agents:
+        try:
+            # Quiet: the claude_code probe above already printed the
+            # user-facing success line; these only record status rows.
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                notify._fire("test", probe_agent, {})
+        except Exception:
+            pass
+    print("  ✓ Install probes sent (%s)" % ", ".join(["claude_code"] + probe_agents))
 
     print("")
     if is_update:
@@ -186,8 +224,11 @@ def main(argv=None):
             print("   ℹ Git commit message titles (first line, 200 chars) are collected to power")
             print("     your activity feed. Opt out anytime by editing %s" % os.path.join(vd, "config"))
     print("")
-    print("   ℹ MCP: restart any running Claude Code / Cursor session to load the")
-    print("     'vibemon' MCP server (verify with /mcp in Claude Code).")
+    print("   ℹ MCP: restart any running Claude Code / Cursor / Gemini CLI session to")
+    print("     load the 'vibemon' MCP server (verify with /mcp in Claude Code).")
+    if has_codex:
+        print("   ℹ Codex MCP is manual (config.toml is TOML — we won't rewrite it):")
+        print("     add [mcp_servers.vibemon] to ~/.codex/config.toml if you want it.")
     return 0
 
 

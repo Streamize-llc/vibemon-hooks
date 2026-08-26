@@ -1,0 +1,11 @@
+{
+  "event_type": "activity",
+  "_agent": "gemini_cli",
+  "hook_event_name": "AfterTool",
+  "session_id": "sess-gem-1",
+  "tool_name": "write_file",
+  "tool_args": {
+    "file_path": "/Users/x/proj/lib/api/todos.ts",
+    "content": "export const a = 1\nexport const b = 2\n"
+  }
+}

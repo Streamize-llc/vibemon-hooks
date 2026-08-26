@@ -19,7 +19,8 @@ def test_agent_settings_paths_layout():
     assert paths.claude_settings().endswith(os.path.join(".claude", "settings.json"))
     assert paths.gemini_settings().endswith(os.path.join(".gemini", "settings.json"))
     assert paths.cursor_hooks().endswith(os.path.join(".cursor", "hooks.json"))
-    assert paths.codex_settings().endswith(os.path.join(".codex", "settings.json"))
+    # v29: Codex reads hooks.json — settings.json was never read by Codex.
+    assert paths.codex_hooks().endswith(os.path.join(".codex", "hooks.json"))
 
 
 def test_python_launcher_returns_existing_executable():

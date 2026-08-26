@@ -1,0 +1,25 @@
+{
+  "agent": "gemini_cli",
+  "cwd": "/Users/x/proj",
+  "event": "activity",
+  "payload": {
+    "hook_event_name": "AfterTool",
+    "lines_added": 2,
+    "lines_removed": 0,
+    "project_root": "user/repo",
+    "session_id": "sess-gem-1",
+    "tool_name": "write_file"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-gem-1",
+  "signals": {
+    "file.depth": 6,
+    "file.ext": "ts",
+    "lines.added": 2,
+    "lines.net": 2,
+    "lines.removed": 0,
+    "tool.duration_unavailable": true,
+    "tool.name": "write_file"
+  },
+  "v": 2
+}

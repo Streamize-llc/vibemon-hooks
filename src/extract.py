@@ -58,6 +58,62 @@ FORBIDDEN_TI_KEYS = {
 }
 
 
+# ─── Cursor payload normalization (v29) ────────────────────────────────
+# Cursor hook payloads have no `tool_name`, put `file_path`/`command` at
+# the top level, and identify the conversation via `conversation_id`.
+# The server's activity gate requires tool/tool_name, so we synthesize a
+# Claude-compatible shape CLIENT-SIDE before sanitize/derive — the server
+# stays untouched. Keyed on agent == "cursor" (set by the hook command),
+# with the specific reshapes driven by `hook_event_name`.
+CURSOR_EVENT_TOOL = {
+    "afterFileEdit": "edit",
+    "afterShellExecution": "bash",
+}
+
+
+def normalize_cursor_payload(payload):
+    """Return a Claude-shaped copy of a raw Cursor hook payload.
+
+    - synthesizes tool_name from hook_event_name (afterFileEdit → "edit",
+      afterShellExecution → "bash"); postToolUseFailure already carries
+      its own tool_name and is left as-is
+    - lifts top-level file_path into tool_input.file_path (the one spot
+      sanitize_payload preserves)
+    - lifts afterShellExecution's top-level command into tool_input.command
+      so bash classification runs (the body is then discarded by
+      sanitize_payload — FORBIDDEN_TI_KEYS)
+    - maps conversation_id → session_id: conversation_id is present on
+      every Cursor payload while session_id only appears on
+      sessionStart/sessionEnd, so keying on conversation_id gives ONE
+      stable id across all events of a conversation (multi-session
+      invariant #2 — useCodingState disambiguation)
+    """
+    if not isinstance(payload, dict):
+        return payload
+    p = dict(payload)
+    hev = p.get("hook_event_name") or ""
+
+    cid = p.get("conversation_id")
+    if isinstance(cid, str) and cid:
+        p["session_id"] = cid
+
+    if not (p.get("tool_name") or p.get("tool")):
+        tool = CURSOR_EVENT_TOOL.get(hev)
+        if tool:
+            p["tool_name"] = tool
+
+    ti = dict(p["tool_input"]) if isinstance(p.get("tool_input"), dict) else {}
+    fp = p.get("file_path")
+    if isinstance(fp, str) and fp and not ti.get("file_path"):
+        ti["file_path"] = fp
+    cmd = p.get("command")
+    if hev == "afterShellExecution" and isinstance(cmd, str) and cmd and not ti.get("command"):
+        ti["command"] = cmd
+    if ti:
+        p["tool_input"] = ti
+    return p
+
+
 # ─── Helpers ───────────────────────────────────────────────────────────
 def count_nonblank_lines(s):
     """Count non-blank newline-separated lines in a string."""
@@ -196,6 +252,17 @@ def derive_signals(event, payload):
             ol = count_nonblank_lines(ti.get("old_string") or ti.get("old_source"))
             la = max(0, nw - ol)
             lr = max(0, ol - nw)
+    # Cursor afterFileEdit ships an `edits` array of {old_string, new_string}
+    # pairs at the top level. The bodies are read for counting ONLY and never
+    # leave this function (canary_cursor_edits fixture pins that).
+    if not (la or lr) and tn == "edit" and isinstance(payload.get("edits"), list):
+        for e in payload["edits"]:
+            if not isinstance(e, dict):
+                continue
+            nw = count_nonblank_lines(e.get("new_string"))
+            ol = count_nonblank_lines(e.get("old_string"))
+            la += max(0, nw - ol)
+            lr += max(0, ol - nw)
     if la or lr:
         sig["lines.added"] = la
         sig["lines.removed"] = lr
@@ -250,7 +317,8 @@ def derive_signals(event, payload):
     # Failure classification
     if event == "tool_failure":
         err = ""
-        for k in ("error", "tool_response", "response", "message", "stderr"):
+        # error_message: Cursor postToolUseFailure's field name.
+        for k in ("error", "error_message", "tool_response", "response", "message", "stderr"):
             v = payload.get(k)
             if isinstance(v, str) and v:
                 err = v
@@ -329,6 +397,13 @@ def build_envelope(
     RAW Claude Code payload (with bodies). This function sanitizes and
     derives in one place."""
     payload = payload if isinstance(payload, dict) else {}
+
+    # Cursor payloads arrive in a different dialect — reshape to the
+    # Claude-compatible form first (tool_name synthesis, file_path /
+    # command lift, conversation_id → session_id). All other agents pass
+    # through untouched, so the Claude Code wire format cannot regress.
+    if agent == "cursor":
+        payload = normalize_cursor_payload(payload)
 
     # Compute signals from raw (we read bodies, but only emit shape)
     signals = derive_signals(event, payload)

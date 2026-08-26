@@ -124,7 +124,7 @@ def test_cursor_merge_idempotent():
 
 def test_codex_merge_idempotent():
     with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "settings.json")
+        path = os.path.join(d, "hooks.json")
         merge_codex(path)
         first = _read(path)
         merge_codex(path)
@@ -243,13 +243,14 @@ def test_cursor_merge_with_python_prefix():
 
 def test_codex_merge_with_python_prefix():
     with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "settings.json")
+        path = os.path.join(d, "hooks.json")
         merge_codex(path, notify_prefix=WIN_PREFIX)
         s = _read(path)
         cmds = [
-            entry["command"]
+            h["command"]
             for entries in s["hooks"].values()
             for entry in entries
+            for h in entry["hooks"]
         ]
         assert cmds and all(WIN_PREFIX in c for c in cmds)
 

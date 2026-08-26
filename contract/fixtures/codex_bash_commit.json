@@ -1,0 +1,11 @@
+{
+  "event_type": "bash",
+  "_agent": "codex_cli",
+  "hook_event_name": "PostToolUse",
+  "session_id": "sess-codex-1",
+  "turn_id": "turn-1",
+  "cwd": "/Users/x/proj",
+  "tool_name": "Bash",
+  "tool_input": {"command": "git commit -am \"chore: codex wiring\""},
+  "tool_response": {"output": "[main 123abc] chore: codex wiring"}
+}

@@ -38,8 +38,11 @@ def cursor_hooks():
     return os.path.join(home(), ".cursor", "hooks.json")
 
 
-def codex_settings():
-    return os.path.join(home(), ".codex", "settings.json")
+def codex_hooks():
+    """Codex CLI reads hooks from ~/.codex/hooks.json — NOT settings.json
+    (v28 wrote there; Codex never read it). merge_codex also scrubs the
+    stale sibling settings.json on upgrade."""
+    return os.path.join(home(), ".codex", "hooks.json")
 
 
 def claude_mcp_config():

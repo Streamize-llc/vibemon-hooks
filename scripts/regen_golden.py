@@ -34,12 +34,15 @@ def regen_one(fixture_path):
     with open(fixture_path, encoding="utf-8") as f:
         raw = json.load(f)
     event = raw.pop("event_type", "unknown")
+    # "_agent" selects the source agent (default claude_code) — cursor
+    # fixtures need it because build_envelope normalizes cursor payloads.
+    agent = raw.pop("_agent", "claude_code")
     raw.pop("_meta_only_for_test", None)
 
     env = build_envelope(
         event=event,
         payload=raw,
-        agent="claude_code",
+        agent=agent,
         cwd="/Users/x/proj",
         timestamp="<redacted>",
         project_root="user/repo",

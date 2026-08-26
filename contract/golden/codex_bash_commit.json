@@ -1,0 +1,23 @@
+{
+  "agent": "codex_cli",
+  "cwd": "/Users/x/proj",
+  "event": "bash",
+  "payload": {
+    "cwd": "/Users/x/proj",
+    "hook_event_name": "PostToolUse",
+    "project_root": "user/repo",
+    "session_id": "sess-codex-1",
+    "tool_input": {},
+    "tool_name": "Bash"
+  },
+  "project_root": "user/repo",
+  "session_id": "sess-codex-1",
+  "signals": {
+    "bash.byte_len": 36,
+    "bash.category": "git.commit",
+    "bash.head": "git",
+    "commit.message": "chore: codex wiring",
+    "tool.name": "bash"
+  },
+  "v": 2
+}

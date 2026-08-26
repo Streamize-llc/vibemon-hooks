@@ -71,7 +71,12 @@ def _build_both(fixture_path, event, monkeypatch):
     Windows but / on POSIX)."""
     with open(fixture_path, encoding="utf-8") as f:
         raw = json.load(f)
-    raw.pop("event_type", None)
+    # The fixture's own event_type/_agent win over the filename heuristic
+    # (cursor/gemini/codex fixtures declare their agent explicitly).
+    file_event = raw.pop("event_type", None)
+    if file_event:
+        event = file_event
+    agent = raw.pop("_agent", "claude_code")
     raw.pop("_meta_only_for_test", None)
 
     captured = {}
@@ -100,7 +105,7 @@ def _build_both(fixture_path, event, monkeypatch):
             shared_cwd = os.getcwd()  # canonical for whatever OS we're on
 
             # notify.py path
-            rc = notify._fire(event, "claude_code", raw)
+            rc = notify._fire(event, agent, raw)
             assert rc == 0
             assert "body" in captured, "notify._fire did not invoke _spawn_post"
             notify_envelope = json.loads(captured["body"])
@@ -109,7 +114,7 @@ def _build_both(fixture_path, event, monkeypatch):
             expected_envelope = build_envelope(
                 event=event,
                 payload=raw,
-                agent="claude_code",
+                agent=agent,
                 cwd=shared_cwd,
                 timestamp="<redacted>",
                 project_root="user/repo",

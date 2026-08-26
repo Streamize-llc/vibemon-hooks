@@ -50,12 +50,13 @@ def test_envelope_matches_golden(fixture_name, fixtures_dir, golden_dir):
     with open(fixture_path, encoding="utf-8") as f:
         raw = json.load(f)
     event = raw.pop("event_type", "unknown")
+    agent = raw.pop("_agent", "claude_code")
     raw.pop("_meta_only_for_test", None)
 
     actual = _normalize(build_envelope(
         event=event,
         payload=raw,
-        agent="claude_code",
+        agent=agent,
         cwd="/Users/x/proj",
         timestamp="<redacted>",
         project_root="user/repo",

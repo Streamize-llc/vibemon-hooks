@@ -1,0 +1,14 @@
+{
+  "agent": "cursor",
+  "cwd": "/Users/x/proj",
+  "event": "stop",
+  "payload": {
+    "hook_event_name": "stop",
+    "project_root": "user/repo",
+    "session_id": "conv-cursor-1"
+  },
+  "project_root": "user/repo",
+  "session_id": "conv-cursor-1",
+  "signals": {},
+  "v": 2
+}

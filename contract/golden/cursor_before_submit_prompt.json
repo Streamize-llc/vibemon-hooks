@@ -1,0 +1,21 @@
+{
+  "agent": "cursor",
+  "cwd": "/Users/x/proj",
+  "event": "prompt",
+  "payload": {
+    "hook_event_name": "beforeSubmitPrompt",
+    "project_root": "user/repo",
+    "session_id": "conv-cursor-1"
+  },
+  "project_root": "user/repo",
+  "session_id": "conv-cursor-1",
+  "signals": {
+    "prompt.bucket": "XS",
+    "prompt.chars": 38,
+    "prompt.has_code_fence": false,
+    "prompt.has_question": false,
+    "prompt.lang_hint": "ko",
+    "prompt.line_count": 1
+  },
+  "v": 2
+}

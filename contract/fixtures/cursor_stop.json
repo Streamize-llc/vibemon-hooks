@@ -1,0 +1,8 @@
+{
+  "event_type": "stop",
+  "_agent": "cursor",
+  "hook_event_name": "stop",
+  "conversation_id": "conv-cursor-1",
+  "status": "completed",
+  "loop_count": 0
+}

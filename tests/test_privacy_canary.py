@@ -45,12 +45,16 @@ def test_canary_never_appears_in_envelope(canary_path):
     )
 
     event = raw.pop("event_type", "unknown")
+    # "_agent" routes cursor canaries through the cursor normalization
+    # path — the exact code that READS edits[]/output bodies must be the
+    # code under canary watch.
+    agent = raw.pop("_agent", "claude_code")
     raw.pop("_meta_only_for_test", None)
 
     env = build_envelope(
         event=event,
         payload=raw,
-        agent="claude_code",
+        agent=agent,
         cwd="/tmp",
         timestamp="2026-04-22T00:00:00Z",
         project_root="user/repo",

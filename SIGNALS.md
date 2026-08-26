@@ -33,13 +33,16 @@ Set for `Write`, `Edit`, `NotebookEdit`. Counts are non-blank.
 
 ## Bash
 
-Set when the agent ran a Bash tool call (`event = "bash"`).
+Set when the agent ran a shell tool call (`event = "bash"` — Claude Code
+Bash, Gemini `run_shell_command`, Cursor `afterShellExecution`, Codex
+Bash) and on `tool_failure` events whose failing tool was a shell.
 
 | Key | Type | Notes |
 |---|---|---|
 | `bash.category` | enum (open) | See list below. `unknown` if no rule matched. |
-| `bash.head` | string ≤ 32 chars | First whitespace-delimited token. **Not** the whole command. |
+| `bash.head` | string ≤ 32 chars | First **real command** token — inline env-var assignments (`KEY=VAL cmd …`) are skipped so a leading secret can never leak; a command that is *only* assignments becomes `<env>`. **Not** the whole command. |
 | `bash.byte_len` | int ≥ 0 | Length of the original command. The body itself is **never** sent. |
+| `commit.message` | string ≤ 200 chars | Git commit **title** (first non-empty line), only when `bash.category = git.commit`. HEREDOC `-m "$(cat <<'EOF' …)"` forms are unwrapped. On by default; opt out with `no_commit_msg=1` in `~/.vibemon/config` (env `VIBEMON_NO_COMMIT_MSG=1`). |
 
 Bash categories:
 
@@ -90,8 +93,10 @@ Order of substring matching in [src/extract.py](src/extract.py)
 
 | Key | Type | Notes |
 |---|---|---|
-| `tool.name` | string | Lowercased `tool_name` (`"edit"`, `"bash"`, `"task"`, etc.). |
+| `tool.name` | string | Lowercased `tool_name` (`"edit"`, `"bash"`, `"task"`, etc.). For Cursor it is synthesized client-side from `hook_event_name` (`afterFileEdit` → `"edit"`, `afterShellExecution` → `"bash"`). |
 | `tool.is_subagent` | bool | True when `tool.name == "task"` (Claude Code's Task tool). |
+| `tool.duration_ms` | int ≥ 0 | Tool wall time. Set on `activity` / `tool_failure` when the agent reports it — Claude Code ≥ 2.1.119 (`duration_ms`), Cursor (`duration`). |
+| `tool.duration_unavailable` | bool | Set (true) on `activity` / `tool_failure` when the agent reports **no** duration (Gemini CLI, Codex CLI, older Claude Code) — lets analytics mask "no data" instead of misreading it as an instant tool. Exactly one of `tool.duration_ms` / `tool.duration_unavailable` appears on those events. |
 
 ---
 

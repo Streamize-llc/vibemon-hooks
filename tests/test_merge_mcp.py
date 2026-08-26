@@ -41,7 +41,7 @@ def test_fresh_register_claude_shape(tmp_path):
 def test_cursor_kind_omits_type(tmp_path):
     """Cursor's docs define remote servers by url+headers only — no "type"."""
     target = str(tmp_path / "mcp.json")
-    assert merge(target, KEY, include_type=False) is True
+    assert merge(target, KEY, kind="cursor") is True
     entry = _read(target)["mcpServers"]["vibemon"]
     assert "type" not in entry
     assert entry == {
@@ -88,8 +88,49 @@ def test_stale_shape_converges(tmp_path):
     """A previously-written claude-shaped entry converges to the cursor shape."""
     target = str(tmp_path / "mcp.json")
     merge(target, KEY)  # writes {"type": "http", …}
-    assert merge(target, KEY, include_type=False) is True
+    assert merge(target, KEY, kind="cursor") is True
     assert "type" not in _read(target)["mcpServers"]["vibemon"]
+
+
+def test_gemini_kind_uses_httpUrl(tmp_path):
+    """Gemini CLI's streamable-HTTP transport field is `httpUrl` — its
+    `url` means SSE, so writing `url` would silently register a broken
+    server. Shape pinned against the Gemini CLI MCP docs."""
+    target = str(tmp_path / "settings.json")
+    assert merge(target, KEY, kind="gemini") is True
+    entry = _read(target)["mcpServers"]["vibemon"]
+    assert entry == {
+        "httpUrl": MCP_URL,
+        "headers": {"Authorization": "Bearer %s" % KEY},
+    }
+    assert "url" not in entry and "type" not in entry
+
+
+def test_gemini_kind_preserves_hooks_in_same_file(tmp_path):
+    """~/.gemini/settings.json also holds the hook config merge_gemini
+    wrote — MCP registration must only touch mcpServers.vibemon."""
+    target = str(tmp_path / "settings.json")
+    seed = {"hooks": {"SessionStart": [{"hooks": [{"command": "x"}]}]}, "theme": "dark"}
+    with open(target, "w", encoding="utf-8") as f:
+        json.dump(seed, f)
+    assert merge(target, KEY, kind="gemini") is True
+    after = _read(target)
+    assert after["hooks"] == seed["hooks"]
+    assert after["theme"] == "dark"
+
+
+def test_main_gemini_kind_arg(tmp_path, monkeypatch):
+    target = str(tmp_path / "settings.json")
+    monkeypatch.setattr(sys, "argv", ["merge_mcp.py", target, KEY, "gemini"])
+    assert merge_mcp.main() == 0
+    assert "httpUrl" in _read(target)["mcpServers"]["vibemon"]
+
+
+def test_main_unknown_kind_skips(tmp_path, monkeypatch):
+    target = str(tmp_path / "whatever.json")
+    monkeypatch.setattr(sys, "argv", ["merge_mcp.py", target, KEY, "codex"])
+    assert merge_mcp.main() == 0  # skip, not an install failure (set -e)
+    assert not os.path.exists(target)
 
 
 def test_corrupt_json_left_untouched(tmp_path):

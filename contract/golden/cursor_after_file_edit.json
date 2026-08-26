@@ -1,0 +1,29 @@
+{
+  "agent": "cursor",
+  "cwd": "/Users/x/proj",
+  "event": "activity",
+  "payload": {
+    "hook_event_name": "afterFileEdit",
+    "lines_added": 3,
+    "lines_removed": 0,
+    "model": "claude-4.5-sonnet",
+    "project_root": "user/repo",
+    "session_id": "conv-cursor-1",
+    "tool_input": {
+      "file_path": "/Users/x/proj/src/components/Button.tsx"
+    },
+    "tool_name": "edit"
+  },
+  "project_root": "user/repo",
+  "session_id": "conv-cursor-1",
+  "signals": {
+    "file.depth": 6,
+    "file.ext": "tsx",
+    "lines.added": 3,
+    "lines.net": 3,
+    "lines.removed": 0,
+    "tool.duration_unavailable": true,
+    "tool.name": "edit"
+  },
+  "v": 2
+}

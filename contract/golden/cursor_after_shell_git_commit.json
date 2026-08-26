@@ -1,0 +1,23 @@
+{
+  "agent": "cursor",
+  "cwd": "/Users/x/proj",
+  "event": "bash",
+  "payload": {
+    "duration": 842,
+    "hook_event_name": "afterShellExecution",
+    "project_root": "user/repo",
+    "session_id": "conv-cursor-1",
+    "tool_input": {},
+    "tool_name": "bash"
+  },
+  "project_root": "user/repo",
+  "session_id": "conv-cursor-1",
+  "signals": {
+    "bash.byte_len": 46,
+    "bash.category": "git.commit",
+    "bash.head": "git",
+    "commit.message": "fix: cursor pipeline goes live",
+    "tool.name": "bash"
+  },
+  "v": 2
+}

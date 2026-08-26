@@ -1,0 +1,10 @@
+{
+  "event_type": "bash",
+  "_agent": "cursor",
+  "hook_event_name": "afterShellExecution",
+  "conversation_id": "conv-cursor-1",
+  "generation_id": "gen-cursor-2",
+  "command": "git commit -m 'fix: cursor pipeline goes live'",
+  "output": "[main abc1234] fix: cursor pipeline goes live\n 1 file changed",
+  "duration": 842
+}

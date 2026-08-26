@@ -21,7 +21,7 @@ fi
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="28"
+VIBEMON_VERSION="29"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -75,6 +75,23 @@ API_URL="https://sirpdtcwawcidhgtltps.supabase.co/functions/v1"
 VIBEMON_DIR="$HOME/.vibemon"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 GEMINI_SETTINGS="$HOME/.gemini/settings.json"
+
+# ─── Agent presence snapshot (v29) ───────────────────────────────────
+# Taken BEFORE the merge sections below run their `mkdir -p`s. The old
+# inline `[ -d "$HOME/.claude" ]` gate in section 5e was evaluated AFTER
+# section 5a's mkdir had already created ~/.claude, so it was always true
+# and Claude-less machines got MCP registrations for an agent they don't
+# have. (Machines that ran v≤28 already have these dirs from our own
+# earlier mkdirs — for those the snapshot keeps today's behavior; only
+# fresh installs get the honest gate.)
+HAS_CLAUDE=false
+if command -v claude &>/dev/null || [ -d "$HOME/.claude" ]; then HAS_CLAUDE=true; fi
+HAS_GEMINI=false
+if command -v gemini &>/dev/null || [ -d "$HOME/.gemini" ]; then HAS_GEMINI=true; fi
+HAS_CURSOR=false
+if command -v cursor &>/dev/null || [ -d "$HOME/.cursor" ]; then HAS_CURSOR=true; fi
+HAS_CODEX=false
+if command -v codex &>/dev/null || [ -d "$HOME/.codex" ]; then HAS_CODEX=true; fi
 
 if [ "$IS_UPDATE" = true ]; then
   echo "🐾 Updating VibeMon… (v$VIBEMON_VERSION)"
@@ -689,6 +706,62 @@ FORBIDDEN_TI_KEYS = {
 }
 
 
+# ─── Cursor payload normalization (v29) ────────────────────────────────
+# Cursor hook payloads have no `tool_name`, put `file_path`/`command` at
+# the top level, and identify the conversation via `conversation_id`.
+# The server's activity gate requires tool/tool_name, so we synthesize a
+# Claude-compatible shape CLIENT-SIDE before sanitize/derive — the server
+# stays untouched. Keyed on agent == "cursor" (set by the hook command),
+# with the specific reshapes driven by `hook_event_name`.
+CURSOR_EVENT_TOOL = {
+    "afterFileEdit": "edit",
+    "afterShellExecution": "bash",
+}
+
+
+def normalize_cursor_payload(payload):
+    """Return a Claude-shaped copy of a raw Cursor hook payload.
+
+    - synthesizes tool_name from hook_event_name (afterFileEdit → "edit",
+      afterShellExecution → "bash"); postToolUseFailure already carries
+      its own tool_name and is left as-is
+    - lifts top-level file_path into tool_input.file_path (the one spot
+      sanitize_payload preserves)
+    - lifts afterShellExecution's top-level command into tool_input.command
+      so bash classification runs (the body is then discarded by
+      sanitize_payload — FORBIDDEN_TI_KEYS)
+    - maps conversation_id → session_id: conversation_id is present on
+      every Cursor payload while session_id only appears on
+      sessionStart/sessionEnd, so keying on conversation_id gives ONE
+      stable id across all events of a conversation (multi-session
+      invariant #2 — useCodingState disambiguation)
+    """
+    if not isinstance(payload, dict):
+        return payload
+    p = dict(payload)
+    hev = p.get("hook_event_name") or ""
+
+    cid = p.get("conversation_id")
+    if isinstance(cid, str) and cid:
+        p["session_id"] = cid
+
+    if not (p.get("tool_name") or p.get("tool")):
+        tool = CURSOR_EVENT_TOOL.get(hev)
+        if tool:
+            p["tool_name"] = tool
+
+    ti = dict(p["tool_input"]) if isinstance(p.get("tool_input"), dict) else {}
+    fp = p.get("file_path")
+    if isinstance(fp, str) and fp and not ti.get("file_path"):
+        ti["file_path"] = fp
+    cmd = p.get("command")
+    if hev == "afterShellExecution" and isinstance(cmd, str) and cmd and not ti.get("command"):
+        ti["command"] = cmd
+    if ti:
+        p["tool_input"] = ti
+    return p
+
+
 # ─── Helpers ───────────────────────────────────────────────────────────
 def count_nonblank_lines(s):
     """Count non-blank newline-separated lines in a string."""
@@ -827,6 +900,17 @@ def derive_signals(event, payload):
             ol = count_nonblank_lines(ti.get("old_string") or ti.get("old_source"))
             la = max(0, nw - ol)
             lr = max(0, ol - nw)
+    # Cursor afterFileEdit ships an `edits` array of {old_string, new_string}
+    # pairs at the top level. The bodies are read for counting ONLY and never
+    # leave this function (canary_cursor_edits fixture pins that).
+    if not (la or lr) and tn == "edit" and isinstance(payload.get("edits"), list):
+        for e in payload["edits"]:
+            if not isinstance(e, dict):
+                continue
+            nw = count_nonblank_lines(e.get("new_string"))
+            ol = count_nonblank_lines(e.get("old_string"))
+            la += max(0, nw - ol)
+            lr += max(0, ol - nw)
     if la or lr:
         sig["lines.added"] = la
         sig["lines.removed"] = lr
@@ -881,7 +965,8 @@ def derive_signals(event, payload):
     # Failure classification
     if event == "tool_failure":
         err = ""
-        for k in ("error", "tool_response", "response", "message", "stderr"):
+        # error_message: Cursor postToolUseFailure's field name.
+        for k in ("error", "error_message", "tool_response", "response", "message", "stderr"):
             v = payload.get(k)
             if isinstance(v, str) and v:
                 err = v
@@ -960,6 +1045,13 @@ def build_envelope(
     RAW Claude Code payload (with bodies). This function sanitizes and
     derives in one place."""
     payload = payload if isinstance(payload, dict) else {}
+
+    # Cursor payloads arrive in a different dialect — reshape to the
+    # Claude-compatible form first (tool_name synthesis, file_path /
+    # command lift, conversation_id → session_id). All other agents pass
+    # through untouched, so the Claude Code wire format cannot regress.
+    if agent == "cursor":
+        payload = normalize_cursor_payload(payload)
 
     # Compute signals from raw (we read bodies, but only emit shape)
     signals = derive_signals(event, payload)
@@ -1529,7 +1621,7 @@ echo "  ✓ Gemini CLI hooks configured ($GEMINI_SETTINGS)"
 
 # ─── 5c. Merge Cursor hooks (if installed) ───────────────────────────
 CURSOR_HOOKS="$HOME/.cursor/hooks.json"
-if command -v cursor &>/dev/null || [ -d "$HOME/.cursor" ]; then
+if [ "$HAS_CURSOR" = true ]; then
   mkdir -p "$(dirname "$CURSOR_HOOKS")"
   python3 - "$CURSOR_HOOKS" << 'PYMERGE_CURSOR'
 """
@@ -1597,7 +1689,24 @@ class FileLock:
 merge_cursor.py — Merge VibeMon hooks into ~/.cursor/hooks.json.
 
 Cursor's hook config is shallower than Claude/Gemini: each event maps
-directly to a list of {command, timeout} entries with no nested 'hooks' array.
+directly to a list of {command, timeout} entries with no nested 'hooks'
+array, plus a top-level "version": 1.
+
+v29 rewired the events against Cursor's real hook surface (ground truth:
+a hand-wired working hooks.json + the official hooks docs). The old
+config registered `afterFileCreate` — an event Cursor does not have —
+and used timeout 5000, copy-pasted from Gemini's milliseconds. Cursor
+timeouts are SECONDS (5000 = 83 minutes). Result: zero production
+events had ever arrived through this wiring.
+
+Event map (cursor event → vibemon event):
+  sessionStart        → session_start
+  sessionEnd          → session_end
+  beforeSubmitPrompt  → prompt
+  stop                → stop
+  afterFileEdit       → activity
+  afterShellExecution → bash
+  postToolUseFailure  → tool_failure
 
 Uses an exclusive FileLock + tempfile.mkstemp + os.replace for safety
 against concurrent install.sh / install.ps1 runs from multiple AI
@@ -1620,15 +1729,33 @@ except ImportError:
 
 DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
 
+# Seconds, not milliseconds (Cursor docs; the working hand-wired config
+# on record uses 10). Keep small: hooks fire on every edit/shell run.
+CURSOR_TIMEOUT_S = 10
+
+# cursor event name → vibemon event name. This dict is the single source
+# the merge builds from; tests/test_merge_events.py pins it so a ghost
+# event (afterFileCreate…) can never come back.
+EVENT_MAP = {
+    "sessionStart": "session_start",
+    "sessionEnd": "session_end",
+    "beforeSubmitPrompt": "prompt",
+    "stop": "stop",
+    "afterFileEdit": "activity",
+    "afterShellExecution": "bash",
+    "postToolUseFailure": "tool_failure",
+}
+
 
 def _build_hooks(notify_prefix):
     return {
-        "afterFileEdit": [
-            {"command": "%s activity cursor" % notify_prefix, "timeout": 5000},
-        ],
-        "afterFileCreate": [
-            {"command": "%s activity cursor" % notify_prefix, "timeout": 5000},
-        ],
+        cursor_event: [
+            {
+                "command": "%s %s cursor" % (notify_prefix, vibemon_event),
+                "timeout": CURSOR_TIMEOUT_S,
+            },
+        ]
+        for cursor_event, vibemon_event in EVENT_MAP.items()
     }
 
 
@@ -1658,13 +1785,36 @@ def merge(hooks_path, notify_prefix=None, hooks_def=None):
                     )
                     return False
 
+        if not isinstance(config, dict):
+            print(
+                f"  ⚠ {hooks_path} is not a JSON object; skipping Cursor hook registration.",
+                file=sys.stderr,
+            )
+            return False
+
         hooks = config.setdefault("hooks", {})
+
+        # Sweep vibemon entries from EVERY event first — not just the ones
+        # we register. This is what removes the v28 ghost (`afterFileCreate`)
+        # on upgrade instead of leaving it behind forever.
+        for event_name in list(hooks.keys()):
+            entries = hooks.get(event_name)
+            if not isinstance(entries, list):
+                continue
+            kept = [e for e in entries if not (isinstance(e, dict) and _is_vibemon_entry(e))]
+            if kept:
+                hooks[event_name] = kept
+            else:
+                del hooks[event_name]
+
         for event_name, new_entries in hooks_def.items():
             existing = hooks.get(event_name, [])
-            existing = [e for e in existing if not _is_vibemon_entry(e)]
             existing.extend(new_entries)
             hooks[event_name] = existing
         config["hooks"] = hooks
+        # Cursor's schema carries a top-level version; write it on fresh
+        # files, preserve whatever an existing file declares.
+        config.setdefault("version", 1)
 
         dir_path = os.path.dirname(hooks_path) or "."
         fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".hooks.", suffix=".tmp")
@@ -1691,11 +1841,13 @@ PYMERGE_CURSOR
   echo "  ✓ Cursor hooks configured ($CURSOR_HOOKS)"
 fi
 
-# ─── 5d. Merge Codex CLI hooks (if installed) ────────────────────────
-CODEX_SETTINGS="$HOME/.codex/settings.json"
-if command -v codex &>/dev/null || [ -d "$HOME/.codex" ]; then
-  mkdir -p "$(dirname "$CODEX_SETTINGS")"
-  python3 - "$CODEX_SETTINGS" << 'PYMERGE_CODEX'
+# ─── 5d. Write Codex CLI hooks (if installed) ────────────────────────
+# Codex reads ~/.codex/hooks.json (NOT settings.json — v28 wrote there
+# and Codex never saw it) and gates new hooks behind in-app approval.
+CODEX_HOOKS="$HOME/.codex/hooks.json"
+if [ "$HAS_CODEX" = true ]; then
+  mkdir -p "$(dirname "$CODEX_HOOKS")"
+  python3 - "$CODEX_HOOKS" << 'PYMERGE_CODEX'
 """
 lock.py — Cross-platform exclusive file lock.
 
@@ -1758,9 +1910,32 @@ class FileLock:
             self.fh.close()
             self.fh = None
 """
-merge_codex.py — Merge VibeMon session hooks into ~/.codex/settings.json.
+merge_codex.py — Write VibeMon hooks into ~/.codex/hooks.json.
 
-Codex CLI only exposes session-level events.
+v29 made this integration real. The old code wrote flat {command,timeout}
+entries into ~/.codex/settings.json — a file Codex CLI does not read.
+Codex discovers hooks in ~/.codex/hooks.json (or [hooks] in config.toml),
+with the nested Claude-style shape and a REQUIRED "type" field:
+
+  {"hooks": {"EventName": [{"matcher"?, "hooks": [{"type": "command",
+                                                   "command": …,
+                                                   "timeout": …}]}]}}
+
+Codex rejects unknown fields, so entries stay minimal (no "name" key).
+
+TRUST GATE (important): Codex skips new/changed non-managed hooks until
+the user reviews them with `/hooks` inside codex. There is NO honest way
+to auto-approve — the trusted_hash registry in config.toml is Codex's
+internal format and must never be written by us. The installer therefore
+says "written — trust to enable", not "configured".
+
+Event map (codex event → vibemon event), conservative per official docs:
+  SessionStart                          → session_start
+  SessionEnd                            → session_end
+  UserPromptSubmit                      → prompt
+  Stop                                  → stop
+  PostToolUse (Edit|Write|apply_patch)  → activity
+  PostToolUse (Bash|shell)              → bash
 
 Uses an exclusive FileLock + tempfile.mkstemp + os.replace for safety
 against concurrent install.sh / install.ps1 runs from multiple AI
@@ -1783,14 +1958,39 @@ except ImportError:
 
 DEFAULT_NOTIFY_PREFIX = "bash ~/.vibemon/notify.sh"
 
+# Seconds (Codex default is 600; SessionEnd defaults to 1 — set explicitly).
+CODEX_TIMEOUT_S = 10
+
+
+def _cmd(notify_prefix, event):
+    return {
+        "type": "command",
+        "command": "%s %s codex_cli" % (notify_prefix, event),
+        "timeout": CODEX_TIMEOUT_S,
+    }
+
 
 def _build_hooks(notify_prefix):
     return {
         "SessionStart": [
-            {"command": "%s session_start codex_cli" % notify_prefix, "timeout": 5000},
+            {"hooks": [_cmd(notify_prefix, "session_start")]},
         ],
         "SessionEnd": [
-            {"command": "%s session_end codex_cli" % notify_prefix, "timeout": 5000},
+            {"hooks": [_cmd(notify_prefix, "session_end")]},
+        ],
+        "UserPromptSubmit": [
+            {"hooks": [_cmd(notify_prefix, "prompt")]},
+        ],
+        "Stop": [
+            {"hooks": [_cmd(notify_prefix, "stop")]},
+        ],
+        "PostToolUse": [
+            # Matchers are regexes over the tool name (docs list Edit /
+            # Write / apply_patch / Bash as Codex tool names; "shell" is
+            # included defensively for older builds — an unmatched
+            # alternative is harmless).
+            {"matcher": "Edit|Write|apply_patch", "hooks": [_cmd(notify_prefix, "activity")]},
+            {"matcher": "Bash|shell", "hooks": [_cmd(notify_prefix, "bash")]},
         ],
     }
 
@@ -1799,50 +1999,135 @@ VIBEMON_HOOKS = _build_hooks(DEFAULT_NOTIFY_PREFIX)
 
 
 def _is_vibemon_entry(entry):
-    return "vibemon" in entry.get("command", "")
+    for h in entry.get("hooks", []):
+        cmd = h.get("command", "") if isinstance(h, dict) else h
+        if "vibemon" in cmd:
+            return True
+    return False
 
 
-def merge(settings_path, notify_prefix=None, hooks_def=None):
+def _is_legacy_vibemon_entry(entry):
+    """v28 wrote FLAT entries ({command, timeout}, no nested hooks list)."""
+    return isinstance(entry, dict) and "vibemon" in entry.get("command", "")
+
+
+def _scrub_legacy_settings(hooks_path):
+    """Remove the dead v28 vibemon entries from ~/.codex/settings.json.
+
+    Codex never read that file, but leaving our stale hooks in it invites
+    confusion (and would be picked up if Codex ever starts reading it).
+    Only strips vibemon entries; never creates the file, never touches
+    anything else in it, and skips silently when unparseable.
+    """
+    legacy_path = os.path.join(os.path.dirname(hooks_path) or ".", "settings.json")
+    if os.path.abspath(legacy_path) == os.path.abspath(hooks_path):
+        return  # caller pointed merge() at settings.json itself — nothing legacy
+    if not os.path.exists(legacy_path):
+        return
+    try:
+        with FileLock(legacy_path):
+            with open(legacy_path, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+            if not isinstance(settings, dict):
+                return
+            hooks = settings.get("hooks")
+            if not isinstance(hooks, dict):
+                return
+            changed = False
+            for event_name in list(hooks.keys()):
+                entries = hooks.get(event_name)
+                if not isinstance(entries, list):
+                    continue
+                kept = [
+                    e for e in entries
+                    if not (_is_legacy_vibemon_entry(e)
+                            or (isinstance(e, dict) and _is_vibemon_entry(e)))
+                ]
+                if len(kept) != len(entries):
+                    changed = True
+                    if kept:
+                        hooks[event_name] = kept
+                    else:
+                        del hooks[event_name]
+            if not changed:
+                return
+            if not hooks:
+                settings.pop("hooks", None)
+            dir_path = os.path.dirname(legacy_path) or "."
+            fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".settings.", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(settings, f, indent=2, ensure_ascii=False)
+                    f.write("\n")
+                os.replace(tmp_path, legacy_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+    except (json.JSONDecodeError, OSError):
+        # Not ours / not parseable — leave it alone.
+        return
+
+
+def merge(hooks_path, notify_prefix=None, hooks_def=None):
     if hooks_def is None:
         hooks_def = VIBEMON_HOOKS if notify_prefix is None else _build_hooks(notify_prefix)
 
-    os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
-    with FileLock(settings_path):
-        settings = {}
-        if os.path.exists(settings_path):
-            with open(settings_path, "r", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(hooks_path) or ".", exist_ok=True)
+    with FileLock(hooks_path):
+        config = {}
+        if os.path.exists(hooks_path):
+            with open(hooks_path, "r", encoding="utf-8") as f:
                 try:
-                    settings = json.load(f)
+                    config = json.load(f)
                 except json.JSONDecodeError:
                     # Don't clobber a file we don't own — skip and say so.
                     print(
-                        f"  ⚠ Could not parse {settings_path}; skipping Codex CLI hook registration.",
+                        f"  ⚠ Could not parse {hooks_path}; skipping Codex CLI hook registration.",
                         file=sys.stderr,
                     )
                     return False
 
-        if not isinstance(settings, dict):
+        if not isinstance(config, dict):
             print(
-                f"  ⚠ {settings_path} is not a JSON object; skipping Codex CLI hook registration.",
+                f"  ⚠ {hooks_path} is not a JSON object; skipping Codex CLI hook registration.",
                 file=sys.stderr,
             )
             return False
 
-        hooks = settings.setdefault("hooks", {})
+        hooks = config.setdefault("hooks", {})
+
+        # Sweep vibemon entries from EVERY event first, so renamed/removed
+        # registrations don't linger across upgrades.
+        for event_name in list(hooks.keys()):
+            entries = hooks.get(event_name)
+            if not isinstance(entries, list):
+                continue
+            kept = [
+                e for e in entries
+                if not (isinstance(e, dict)
+                        and (_is_vibemon_entry(e) or _is_legacy_vibemon_entry(e)))
+            ]
+            if kept:
+                hooks[event_name] = kept
+            else:
+                del hooks[event_name]
+
         for event_name, new_entries in hooks_def.items():
             existing = hooks.get(event_name, [])
-            existing = [e for e in existing if not _is_vibemon_entry(e)]
             existing.extend(new_entries)
             hooks[event_name] = existing
-        settings["hooks"] = hooks
+        config["hooks"] = hooks
 
-        dir_path = os.path.dirname(settings_path) or "."
-        fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".settings.", suffix=".tmp")
+        dir_path = os.path.dirname(hooks_path) or "."
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".hooks.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=2, ensure_ascii=False)
+                json.dump(config, f, indent=2, ensure_ascii=False)
                 f.write("\n")
-            os.replace(tmp_path, settings_path)
+            os.replace(tmp_path, hooks_path)
         except Exception:
             try:
                 os.unlink(tmp_path)
@@ -1850,22 +2135,29 @@ def merge(settings_path, notify_prefix=None, hooks_def=None):
                 pass
             raise
 
+    # Outside the hooks.json lock (separate file, separate sentinel).
+    _scrub_legacy_settings(hooks_path)
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        sys.stderr.write("usage: merge_codex.py <settings_path> [notify_prefix]\n")
+        sys.stderr.write("usage: merge_codex.py <hooks_path> [notify_prefix]\n")
         sys.exit(2)
     prefix = sys.argv[2] if len(sys.argv) > 2 else None
     merge(sys.argv[1], notify_prefix=prefix)
 PYMERGE_CODEX
-  echo "  ✓ Codex CLI hooks configured ($CODEX_SETTINGS)"
+  echo "  ✓ Codex CLI hooks written ($CODEX_HOOKS)"
+  echo "    ⚠ Codex requires approval: run codex, then /hooks, and trust the"
+  echo "      vibemon entries to enable them."
 fi
 
-# ─── 5e. Register VibeMon MCP server (Claude Code + Cursor) ──────────
+# ─── 5e. Register VibeMon MCP server (Claude Code + Cursor + Gemini) ─
 # Phase 2: enable AI agents to read/write TODOs via Model Context Protocol.
 # Endpoint: https://vibemon.dev/api/mcp (Streamable HTTP transport)
+# Gates use the pre-mkdir snapshot above — the merge sections have already
+# created ~/.claude and ~/.gemini by this point.
 CLAUDE_MCP_CONFIG="$HOME/.claude.json"
-if [ -d "$HOME/.claude" ] || command -v claude &>/dev/null; then
+if [ "$HAS_CLAUDE" = true ]; then
   python3 - "$CLAUDE_MCP_CONFIG" "$API_KEY" << 'PYMERGE_CLAUDE_MCP'
 """
 lock.py — Cross-platform exclusive file lock.
@@ -1928,10 +2220,11 @@ class FileLock:
         finally:
             self.fh.close()
             self.fh = None
-"""Add the VibeMon HTTP MCP server to a Claude / Cursor config JSON.
+"""Add the VibeMon HTTP MCP server to a Claude / Cursor / Gemini config JSON.
 
-Both Claude Code (~/.claude.json) and Cursor (~/.cursor/mcp.json) keep a top-level
-`mcpServers` object whose keys are MCP server names. We merge our entry idempotently:
+Claude Code (~/.claude.json), Cursor (~/.cursor/mcp.json) and Gemini CLI
+(~/.gemini/settings.json) all keep a top-level `mcpServers` object whose keys
+are MCP server names. We merge our entry idempotently:
 
   {
     "mcpServers": {
@@ -1944,7 +2237,7 @@ Both Claude Code (~/.claude.json) and Cursor (~/.cursor/mcp.json) keep a top-lev
     }
   }
 
-Usage (inside install.sh): `python3 - <target.json> <api_key> [claude|cursor]`
+Usage (inside install.sh): `python3 - <target.json> <api_key> [claude|cursor|gemini]`
 
 Shape per target:
   - claude: {"type": "http", "url", "headers"} — exactly what
@@ -1952,6 +2245,14 @@ Shape per target:
   - cursor: {"url", "headers"} — Cursor's docs define remote servers by `url`
     alone (its `type` enum is for stdio), so we omit the field rather than
     feed an undocumented value to a possibly strict parser.
+  - gemini: {"httpUrl", "headers"} — Gemini CLI's docs use `httpUrl` for the
+    streamable-HTTP transport (`url` there means SSE), headers as an object.
+
+(Codex CLI is intentionally absent: its MCP registry is `[mcp_servers]` in
+~/.codex/config.toml — TOML, which the stdlib can read but not write, in
+Codex's PRIMARY config file holding trust hashes and project state. A
+hand-rolled TOML writer corrupting that file is a worse outcome than asking
+for one manual step, so the installer prints a manual hint instead.)
 
 The script is idempotent — re-running with the same args is a no-op (apart from
 updating the Authorization header when the API key rotates). The targets are
@@ -1980,11 +2281,24 @@ except ImportError:
 
 MCP_URL = "https://vibemon.dev/api/mcp"
 
+# Per-target entry shapes — see module docstring for the doc citations.
+KINDS = ("claude", "cursor", "gemini")
 
-def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
+
+def _desired_entry(api_key: str, kind: str) -> dict:
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if kind == "gemini":
+        return {"httpUrl": MCP_URL, "headers": headers}
+    if kind == "cursor":
+        return {"url": MCP_URL, "headers": headers}
+    return {"type": "http", "url": MCP_URL, "headers": headers}
+
+
+def merge(target_path: str, api_key: str, kind: str = "claude") -> bool:
     """Insert/update the vibemon entry. Returns True if the file changed.
 
-    include_type=False writes the Cursor shape (url + headers, no "type").
+    kind selects the entry shape: "claude" (type+url+headers),
+    "cursor" (url+headers), "gemini" (httpUrl+headers).
     """
     target_dir = os.path.dirname(target_path) or "."
     os.makedirs(target_dir, exist_ok=True)
@@ -2014,12 +2328,7 @@ def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
             return False
 
         existing = servers.get("vibemon")
-        desired = {
-            "url": MCP_URL,
-            "headers": {"Authorization": f"Bearer {api_key}"},
-        }
-        if include_type:
-            desired = {"type": "http", **desired}
+        desired = _desired_entry(api_key, kind)
 
         if existing == desired:
             return False  # already up to date
@@ -2045,15 +2354,18 @@ def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
 
 def main() -> int:
     if len(sys.argv) < 3:
-        print("usage: merge_mcp.py <target_path> <api_key> [claude|cursor]", file=sys.stderr)
+        print("usage: merge_mcp.py <target_path> <api_key> [claude|cursor|gemini]", file=sys.stderr)
         return 2
     target_path = sys.argv[1]
     api_key = sys.argv[2]
     kind = sys.argv[3] if len(sys.argv) > 3 else "claude"
+    if kind not in KINDS:
+        print(f"  ⚠ Unknown MCP target kind {kind!r}; skipping MCP registration.", file=sys.stderr)
+        return 0
     if not api_key.startswith("vbm_"):
         print("  ⚠ API key does not start with 'vbm_'; skipping MCP registration.", file=sys.stderr)
         return 0
-    changed = merge(target_path, api_key, include_type=(kind != "cursor"))
+    changed = merge(target_path, api_key, kind=kind)
     if changed:
         print(f"  ✓ MCP server 'vibemon' registered in {target_path}")
     else:
@@ -2068,7 +2380,7 @@ fi
 
 # Cursor gets the docs-exact remote-server shape (url + headers, no "type").
 CURSOR_MCP_CONFIG="$HOME/.cursor/mcp.json"
-if command -v cursor &>/dev/null || [ -d "$HOME/.cursor" ]; then
+if [ "$HAS_CURSOR" = true ]; then
   python3 - "$CURSOR_MCP_CONFIG" "$API_KEY" cursor << 'PYMERGE_CURSOR_MCP'
 """
 lock.py — Cross-platform exclusive file lock.
@@ -2131,10 +2443,11 @@ class FileLock:
         finally:
             self.fh.close()
             self.fh = None
-"""Add the VibeMon HTTP MCP server to a Claude / Cursor config JSON.
+"""Add the VibeMon HTTP MCP server to a Claude / Cursor / Gemini config JSON.
 
-Both Claude Code (~/.claude.json) and Cursor (~/.cursor/mcp.json) keep a top-level
-`mcpServers` object whose keys are MCP server names. We merge our entry idempotently:
+Claude Code (~/.claude.json), Cursor (~/.cursor/mcp.json) and Gemini CLI
+(~/.gemini/settings.json) all keep a top-level `mcpServers` object whose keys
+are MCP server names. We merge our entry idempotently:
 
   {
     "mcpServers": {
@@ -2147,7 +2460,7 @@ Both Claude Code (~/.claude.json) and Cursor (~/.cursor/mcp.json) keep a top-lev
     }
   }
 
-Usage (inside install.sh): `python3 - <target.json> <api_key> [claude|cursor]`
+Usage (inside install.sh): `python3 - <target.json> <api_key> [claude|cursor|gemini]`
 
 Shape per target:
   - claude: {"type": "http", "url", "headers"} — exactly what
@@ -2155,6 +2468,14 @@ Shape per target:
   - cursor: {"url", "headers"} — Cursor's docs define remote servers by `url`
     alone (its `type` enum is for stdio), so we omit the field rather than
     feed an undocumented value to a possibly strict parser.
+  - gemini: {"httpUrl", "headers"} — Gemini CLI's docs use `httpUrl` for the
+    streamable-HTTP transport (`url` there means SSE), headers as an object.
+
+(Codex CLI is intentionally absent: its MCP registry is `[mcp_servers]` in
+~/.codex/config.toml — TOML, which the stdlib can read but not write, in
+Codex's PRIMARY config file holding trust hashes and project state. A
+hand-rolled TOML writer corrupting that file is a worse outcome than asking
+for one manual step, so the installer prints a manual hint instead.)
 
 The script is idempotent — re-running with the same args is a no-op (apart from
 updating the Authorization header when the API key rotates). The targets are
@@ -2183,11 +2504,24 @@ except ImportError:
 
 MCP_URL = "https://vibemon.dev/api/mcp"
 
+# Per-target entry shapes — see module docstring for the doc citations.
+KINDS = ("claude", "cursor", "gemini")
 
-def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
+
+def _desired_entry(api_key: str, kind: str) -> dict:
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if kind == "gemini":
+        return {"httpUrl": MCP_URL, "headers": headers}
+    if kind == "cursor":
+        return {"url": MCP_URL, "headers": headers}
+    return {"type": "http", "url": MCP_URL, "headers": headers}
+
+
+def merge(target_path: str, api_key: str, kind: str = "claude") -> bool:
     """Insert/update the vibemon entry. Returns True if the file changed.
 
-    include_type=False writes the Cursor shape (url + headers, no "type").
+    kind selects the entry shape: "claude" (type+url+headers),
+    "cursor" (url+headers), "gemini" (httpUrl+headers).
     """
     target_dir = os.path.dirname(target_path) or "."
     os.makedirs(target_dir, exist_ok=True)
@@ -2217,12 +2551,7 @@ def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
             return False
 
         existing = servers.get("vibemon")
-        desired = {
-            "url": MCP_URL,
-            "headers": {"Authorization": f"Bearer {api_key}"},
-        }
-        if include_type:
-            desired = {"type": "http", **desired}
+        desired = _desired_entry(api_key, kind)
 
         if existing == desired:
             return False  # already up to date
@@ -2248,15 +2577,18 @@ def merge(target_path: str, api_key: str, include_type: bool = True) -> bool:
 
 def main() -> int:
     if len(sys.argv) < 3:
-        print("usage: merge_mcp.py <target_path> <api_key> [claude|cursor]", file=sys.stderr)
+        print("usage: merge_mcp.py <target_path> <api_key> [claude|cursor|gemini]", file=sys.stderr)
         return 2
     target_path = sys.argv[1]
     api_key = sys.argv[2]
     kind = sys.argv[3] if len(sys.argv) > 3 else "claude"
+    if kind not in KINDS:
+        print(f"  ⚠ Unknown MCP target kind {kind!r}; skipping MCP registration.", file=sys.stderr)
+        return 0
     if not api_key.startswith("vbm_"):
         print("  ⚠ API key does not start with 'vbm_'; skipping MCP registration.", file=sys.stderr)
         return 0
-    changed = merge(target_path, api_key, include_type=(kind != "cursor"))
+    changed = merge(target_path, api_key, kind=kind)
     if changed:
         print(f"  ✓ MCP server 'vibemon' registered in {target_path}")
     else:
@@ -2269,13 +2601,256 @@ if __name__ == "__main__":
 PYMERGE_CURSOR_MCP
 fi
 
+# Gemini CLI: streamable-HTTP servers use `httpUrl` (its `url` means SSE).
+# Same settings.json the hook merge (5b) already lock-writes.
+if [ "$HAS_GEMINI" = true ]; then
+  python3 - "$GEMINI_SETTINGS" "$API_KEY" gemini << 'PYMERGE_GEMINI_MCP'
+"""
+lock.py — Cross-platform exclusive file lock.
+
+Wraps fcntl.flock (Unix) and msvcrt.locking (Windows) behind a single
+context manager so merge_*.py can stay platform-agnostic. Used by the
+settings.json merge code path to prevent corruption under concurrent
+install.sh / install.ps1 runs from multiple AI coding sessions.
+
+See vibemon-app/CLAUDE.md "Multi-Session Concurrency Invariants" #3.
+
+Stdlib only.
+"""
+
+import os
+
+
+IS_WINDOWS = os.name == "nt"
+
+
+class FileLock:
+    """Blocking exclusive lock on a sentinel file.
+
+    Usage:
+        with FileLock(settings_path):
+            # critical section — read, modify, atomic-rename settings.json
+
+    The sentinel file (`<path>.vibemon.lock`) lives next to the protected
+    file. Lock semantics are blocking on both platforms.
+    """
+
+    def __init__(self, base_path):
+        self.path = base_path + ".vibemon.lock"
+        self.fh = None
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        self.fh = open(self.path, "w", encoding="utf-8")
+        if IS_WINDOWS:
+            import msvcrt
+            # LK_LOCK = blocking exclusive on a single byte at offset 0.
+            # Retries indefinitely until acquired.
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                try:
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            else:
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.fh.close()
+            self.fh = None
+"""Add the VibeMon HTTP MCP server to a Claude / Cursor / Gemini config JSON.
+
+Claude Code (~/.claude.json), Cursor (~/.cursor/mcp.json) and Gemini CLI
+(~/.gemini/settings.json) all keep a top-level `mcpServers` object whose keys
+are MCP server names. We merge our entry idempotently:
+
+  {
+    "mcpServers": {
+      "vibemon": {
+        "type":    "http",                          # Claude Code only — see below
+        "url":     "https://vibemon.dev/api/mcp",
+        "headers": { "Authorization": "Bearer vbm_xxx" }
+      },
+      ...
+    }
+  }
+
+Usage (inside install.sh): `python3 - <target.json> <api_key> [claude|cursor|gemini]`
+
+Shape per target:
+  - claude: {"type": "http", "url", "headers"} — exactly what
+    `claude mcp add --transport http` writes to user scope.
+  - cursor: {"url", "headers"} — Cursor's docs define remote servers by `url`
+    alone (its `type` enum is for stdio), so we omit the field rather than
+    feed an undocumented value to a possibly strict parser.
+  - gemini: {"httpUrl", "headers"} — Gemini CLI's docs use `httpUrl` for the
+    streamable-HTTP transport (`url` there means SSE), headers as an object.
+
+(Codex CLI is intentionally absent: its MCP registry is `[mcp_servers]` in
+~/.codex/config.toml — TOML, which the stdlib can read but not write, in
+Codex's PRIMARY config file holding trust hashes and project state. A
+hand-rolled TOML writer corrupting that file is a worse outcome than asking
+for one manual step, so the installer prints a manual hint instead.)
+
+The script is idempotent — re-running with the same args is a no-op (apart from
+updating the Authorization header when the API key rotates). The targets are
+NOT vibemon-owned files (~/.claude.json holds all of Claude Code's user state),
+so on any parse doubt we skip registration and leave the file untouched —
+never "treat as empty and overwrite" like the hook merges do for their own
+settings files.
+"""
+
+import json
+import os
+import sys
+import tempfile
+
+# When concatenated with lock.py (via build.py's # %%EMBED:lock.py%% marker
+# inside install.sh) FileLock is already in module scope, so this import raises
+# ImportError and the `pass` keeps the embedded class. When imported as a module
+# (tests / install.py) src/ is on sys.path so the import succeeds. Mirrors
+# merge_claude/cursor/codex: a missing lock must fail loudly (NameError), never
+# silently degrade to a no-op lock that defeats the multi-session write invariant.
+try:
+    from lock import FileLock  # type: ignore
+except ImportError:
+    pass
+
+
+MCP_URL = "https://vibemon.dev/api/mcp"
+
+# Per-target entry shapes — see module docstring for the doc citations.
+KINDS = ("claude", "cursor", "gemini")
+
+
+def _desired_entry(api_key: str, kind: str) -> dict:
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if kind == "gemini":
+        return {"httpUrl": MCP_URL, "headers": headers}
+    if kind == "cursor":
+        return {"url": MCP_URL, "headers": headers}
+    return {"type": "http", "url": MCP_URL, "headers": headers}
+
+
+def merge(target_path: str, api_key: str, kind: str = "claude") -> bool:
+    """Insert/update the vibemon entry. Returns True if the file changed.
+
+    kind selects the entry shape: "claude" (type+url+headers),
+    "cursor" (url+headers), "gemini" (httpUrl+headers).
+    """
+    target_dir = os.path.dirname(target_path) or "."
+    os.makedirs(target_dir, exist_ok=True)
+
+    # FileLock appends ".vibemon.lock" itself — pass the protected path,
+    # same convention as the merge_{claude,gemini,cursor,codex} callers.
+    with FileLock(target_path):
+        # Read existing
+        data = {}
+        if os.path.exists(target_path):
+            try:
+                with open(target_path, "r", encoding="utf-8") as f:
+                    raw = f.read().strip()
+                    data = json.loads(raw) if raw else {}
+            except (json.JSONDecodeError, OSError):
+                # Don't corrupt invalid JSON — surface and exit
+                print(f"  ⚠ Could not parse {target_path}; skipping MCP registration.", file=sys.stderr)
+                return False
+
+        if not isinstance(data, dict):
+            print(f"  ⚠ {target_path} is not a JSON object; skipping MCP registration.", file=sys.stderr)
+            return False
+
+        servers = data.setdefault("mcpServers", {})
+        if not isinstance(servers, dict):
+            print(f"  ⚠ mcpServers in {target_path} is not an object; skipping MCP registration.", file=sys.stderr)
+            return False
+
+        existing = servers.get("vibemon")
+        desired = _desired_entry(api_key, kind)
+
+        if existing == desired:
+            return False  # already up to date
+
+        servers["vibemon"] = desired
+
+        # Atomic write — temp file in same dir then os.replace
+        fd, tmp = tempfile.mkstemp(dir=target_dir, prefix=".vibemon.", suffix=".json.tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            os.replace(tmp, target_path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    return True
+
+
+def main() -> int:
+    if len(sys.argv) < 3:
+        print("usage: merge_mcp.py <target_path> <api_key> [claude|cursor|gemini]", file=sys.stderr)
+        return 2
+    target_path = sys.argv[1]
+    api_key = sys.argv[2]
+    kind = sys.argv[3] if len(sys.argv) > 3 else "claude"
+    if kind not in KINDS:
+        print(f"  ⚠ Unknown MCP target kind {kind!r}; skipping MCP registration.", file=sys.stderr)
+        return 0
+    if not api_key.startswith("vbm_"):
+        print("  ⚠ API key does not start with 'vbm_'; skipping MCP registration.", file=sys.stderr)
+        return 0
+    changed = merge(target_path, api_key, kind=kind)
+    if changed:
+        print(f"  ✓ MCP server 'vibemon' registered in {target_path}")
+    else:
+        print(f"  · MCP server already up-to-date in {target_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+PYMERGE_GEMINI_MCP
+fi
+
+# Codex MCP ([mcp_servers] in ~/.codex/config.toml) is intentionally NOT
+# auto-written: config.toml is Codex's primary config (trust hashes, model,
+# per-project state) in TOML, which Python's stdlib can read but not write.
+# A hand-rolled writer corrupting that file is worse than one manual step —
+# a hint is printed at the end instead.
+
 # ─── 6. Test connection ──────────────────────────────────────────────
 echo ""
 echo "🔗 Testing connection…"
 # </dev/null is REQUIRED (v24): in piped installs (`curl … | sh`) stdin is
 # the pipe still holding the REST OF THIS SCRIPT; notify.sh's `cat >` would
 # slurp it and the install would silently end right here.
-bash "$VIBEMON_DIR/notify.sh" test </dev/null
+# The claude_code probe is the strict one — an invalid API key must fail
+# the install here (agent arg was previously omitted, so the server's
+# script_install_status only ever learned about claude_code).
+bash "$VIBEMON_DIR/notify.sh" test claude_code </dev/null
+
+# Per-agent install probes (v29) — one script_install_status row per
+# configured agent, so the server knows WHICH agents this machine wired.
+# Best-effort + quiet: a probe hiccup must not fail a good install.
+PROBE_AGENTS="gemini_cli"
+[ "$HAS_CURSOR" = true ] && PROBE_AGENTS="$PROBE_AGENTS cursor"
+[ "$HAS_CODEX" = true ] && PROBE_AGENTS="$PROBE_AGENTS codex_cli"
+for _probe_agent in $PROBE_AGENTS; do
+  bash "$VIBEMON_DIR/notify.sh" test "$_probe_agent" </dev/null >/dev/null 2>&1 || true
+done
+echo "  ✓ Install probes sent (claude_code $PROBE_AGENTS)"
 
 echo ""
 if [ "$IS_UPDATE" = true ]; then
@@ -2294,5 +2869,9 @@ else
   fi
 fi
 echo ""
-echo "   ℹ MCP: restart any running Claude Code / Cursor session to load the"
-echo "     'vibemon' MCP server (verify with /mcp in Claude Code)."
+echo "   ℹ MCP: restart any running Claude Code / Cursor / Gemini CLI session to"
+echo "     load the 'vibemon' MCP server (verify with /mcp in Claude Code)."
+if [ "$HAS_CODEX" = true ]; then
+  echo "   ℹ Codex MCP is manual (config.toml is TOML — we won't rewrite it):"
+  echo "     add [mcp_servers.vibemon] to ~/.codex/config.toml if you want it."
+fi

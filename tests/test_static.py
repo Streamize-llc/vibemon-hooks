@@ -22,6 +22,7 @@ HEREDOCS = [
     ("PYMERGE_CODEX",       "python"),
     ("PYMERGE_CLAUDE_MCP",  "python"),
     ("PYMERGE_CURSOR_MCP",  "python"),
+    ("PYMERGE_GEMINI_MCP",  "python"),
 ]
 
 
@@ -120,6 +121,7 @@ EXEC_HEREDOCS = [
     ("PYMERGE_CODEX", []),
     ("PYMERGE_CLAUDE_MCP", ["vbm_testkey"]),
     ("PYMERGE_CURSOR_MCP", ["vbm_testkey", "cursor"]),
+    ("PYMERGE_GEMINI_MCP", ["vbm_testkey", "gemini"]),
 ]
 
 
@@ -182,3 +184,51 @@ def test_build_is_reproducible(root_dir):
         f"dist/install.sh is stale or non-reproducible.\n"
         f"stdout: {r.stdout}\nstderr: {r.stderr}"
     )
+def test_agent_gate_snapshot_precedes_all_mkdirs(dist_dir):
+    """v29 gate-order fix: the HAS_* agent-presence snapshot must be taken
+    BEFORE any merge section's `mkdir -p` creates the very directories the
+    gates test. v28's inline `[ -d "$HOME/.claude" ]` gate ran after 5a's
+    mkdir had created ~/.claude, so it was always true and Claude-less
+    machines got MCP registrations."""
+    with open(os.path.join(dist_dir, "install.sh"), encoding="utf-8") as f:
+        src = f.read()
+    first_mkdir = src.index('mkdir -p "$(dirname ')
+    for var in ("HAS_CLAUDE=", "HAS_GEMINI=", "HAS_CURSOR=", "HAS_CODEX="):
+        assert var in src, f"{var} snapshot missing from dist/install.sh"
+        assert src.index(var) < first_mkdir, (
+            f"{var} snapshot must be assigned before the first agent mkdir -p"
+        )
+    # The MCP gates must consume the snapshot, not re-test the dirs inline.
+    assert '[ "$HAS_CLAUDE" = true ]' in src
+    assert '[ "$HAS_GEMINI" = true ]' in src
+    assert '[ -d "$HOME/.claude" ] || command -v claude' not in src
+
+
+def test_per_agent_install_probes(dist_dir):
+    """v29: every configured agent gets a `notify.sh test <agent>` probe so
+    script_install_status learns all four agents (previously the probe ran
+    with no agent argument and only claude_code was ever recorded)."""
+    with open(os.path.join(dist_dir, "install.sh"), encoding="utf-8") as f:
+        src = f.read()
+    lines = [l for l in src.splitlines() if '"$VIBEMON_DIR/notify.sh" test' in l]
+    # Strict probe names its agent explicitly …
+    assert any("test claude_code" in l for l in lines), lines
+    # … and no probe may fall back to the agent-less form again.
+    for l in lines:
+        after = l.split('notify.sh" test', 1)[1]
+        assert after.strip() and not after.strip().startswith("<"), (
+            f"agent-less test probe found: {l!r}"
+        )
+    # Best-effort per-agent loop covers the other three.
+    assert "gemini_cli" in src.split("PROBE_AGENTS=")[1].splitlines()[0]
+    assert 'PROBE_AGENTS="$PROBE_AGENTS cursor"' in src
+    assert 'PROBE_AGENTS="$PROBE_AGENTS codex_cli"' in src
+
+
+def test_codex_target_is_hooks_json_in_install_sh(dist_dir):
+    with open(os.path.join(dist_dir, "install.sh"), encoding="utf-8") as f:
+        src = f.read()
+    assert 'CODEX_HOOKS="$HOME/.codex/hooks.json"' in src
+    assert '$HOME/.codex/settings.json' not in src
+    # Honest output — Codex hooks are inert until trusted via /hooks.
+    assert "Codex requires approval" in src
