@@ -25,7 +25,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$VIBEMON_VERSION = "29"
+$VIBEMON_VERSION = "30"
 
 # ─── Embedded Python module bundle (built by scripts/build.py) ─────
 # Contains: paths.py, lock.py, classify.py, extract.py, notify.py,

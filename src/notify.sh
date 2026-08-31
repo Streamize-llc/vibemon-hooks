@@ -116,6 +116,17 @@ GIT_BRANCH=$(git -C "$(pwd)" branch --show-current 2>/dev/null || true)
 GIT_HEAD=$(git -C "$(pwd)" rev-parse HEAD 2>/dev/null || true)
 
 # ─── Build envelope (privacy boundary lives entirely in Python) ──────
+# `|| true` on the python3 call: under `set -e` a broken python3 (pyenv
+# shim, removed CLT) would otherwise kill the script right here, making
+# the empty-envelope fallback below unreachable dead code.
+#
+# Nothing may sit between the backslash-continued env prefix and the
+# `python3` line — not even a comment. A comment there is valid bash, so
+# `bash -n` accepts it, but it ends the logical line: the assignments
+# become plain shell variables, python3 inherits none of them, and every
+# envelope silently degrades to the empty fallback. v28 and v29 shipped
+# exactly that, which broke production collection from 2026-08-26.
+# tests/test_static.py pins both halves of this.
 VIBEMON_EVT="$EVENT_TYPE" \
   VIBEMON_AGENT="$AGENT" \
   VIBEMON_CWD="$(pwd)" \
@@ -126,9 +137,6 @@ VIBEMON_EVT="$EVENT_TYPE" \
   VIBEMON_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   VIBEMON_FILE="$STDIN_FILE" \
   VIBEMON_NO_COMMIT_MSG="$NO_COMMIT_MSG" \
-  # || true: under set -e a broken python3 (pyenv shim, removed CLT) would
-  # otherwise kill the script right here, making the empty-envelope fallback
-  # below unreachable dead code.
   python3 > "$ENV_FILE" 2>/dev/null << 'VIBEMON_PY' || true
 # %%EMBED:classify.py%%
 # %%EMBED:extract.py%%

@@ -1,5 +1,41 @@
 # Changelog
 
+## v30 — 2026-08-31
+
+Collection has been dead since v28 shipped on 2026-08-26. One comment did it.
+
+### The envelope was empty on every Unix install (v28, v29)
+- `notify.sh` builds its envelope by prefixing `python3` with ten
+  `VIBEMON_*` assignments across backslash-continued lines. v28 inserted a
+  three-line comment explaining the trailing `|| true` **between** the last
+  continuation and the `python3` line.
+- A comment ends the logical line. The assignments therefore stopped being
+  a command prefix and became plain shell variables — unexported — and
+  `python3` inherited none of them. `extract.py` saw no event, no agent, no
+  cwd, wrote nothing, and `notify.sh` fell back to
+  `{"v":2,"event":…,"payload":{},"signals":{}}`.
+- Every hook on every macOS and Linux install has been posting that empty
+  envelope for five days: events arrive, classification and signals do not.
+  Windows was unaffected (`notify.py` sets the environment in Python).
+- The comment now sits above the whole command, where it cannot terminate
+  anything.
+
+### Why nothing caught it
+- `bash -n` accepts it — the file is syntactically valid; the defect is
+  semantic.
+- `test_envelope_parity.py` sets the `VIBEMON_*` variables itself before
+  calling `extract.main()`, so it tests the Python contract and assumes the
+  shell delivers the environment. Nothing executed the prefix.
+- Three regression tests close both halves (`tests/test_static.py`):
+  `test_no_comment_inside_line_continuation` rejects a comment after any
+  `\` continuation in `src/notify.sh` and `src/install.sh` (heredoc bodies
+  excluded), the same check runs against the built `NOTIFY_SCRIPT`, and
+  `test_envelope_env_prefix_reaches_python` executes the real block out of
+  `dist/install.sh` with a probe in place of the Python body and asserts
+  all ten variables arrive. All three fail against the v29 build.
+
+No other change. 233 tests green.
+
 ## v29 — 2026-08-26
 
 The collection layer now matches the advertising: Cursor and Codex

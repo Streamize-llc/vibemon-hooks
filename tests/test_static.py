@@ -5,6 +5,7 @@ Catches the most common breakage: someone hand-edits src/install.sh
 in a way that produces invalid bash or Python after the build step.
 """
 
+import json
 import os
 import re
 import subprocess
@@ -232,3 +233,125 @@ def test_codex_target_is_hooks_json_in_install_sh(dist_dir):
     assert '$HOME/.codex/settings.json' not in src
     # Honest output — Codex hooks are inert until trusted via /hooks.
     assert "Codex requires approval" in src
+
+
+# ─── v30: the env prefix must actually reach python3 ────────────────────
+# v28 put an explanatory comment between the backslash-continued VIBEMON_*
+# env prefix and the `python3` line that consumes it. That is valid bash —
+# `bash -n` accepted it and test_envelope_parity sets VIBEMON_* itself, so
+# nothing here noticed — but a comment ENDS the logical line: the
+# assignments degraded to plain shell variables, python3 inherited none of
+# them, and every envelope fell back to the empty payload. Production
+# collection was dead from 2026-08-26 (v28) until v30.
+
+def _continuation_comment_offences(text):
+    """Lines ending in `\\` whose successor is a comment, outside heredocs."""
+    lines = text.splitlines()
+    offences = []
+    heredoc = None
+    for i, line in enumerate(lines):
+        if heredoc is not None:
+            if line.strip() == heredoc:
+                heredoc = None
+            continue
+        opener = re.search(r"<<\s*'([A-Za-z_][A-Za-z0-9_]*)'", line)
+        if opener:
+            heredoc = opener.group(1)
+            continue
+        if line.rstrip().endswith("\\"):
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if nxt.lstrip().startswith("#"):
+                offences.append(f"line {i + 1}: {line.strip()!r} -> {nxt.strip()!r}")
+    return offences
+
+
+@pytest.mark.parametrize("name", ["notify.sh", "install.sh"])
+def test_no_comment_inside_line_continuation(name, src_dir):
+    with open(os.path.join(src_dir, name), encoding="utf-8") as f:
+        offences = _continuation_comment_offences(f.read())
+    assert not offences, (
+        f"src/{name}: a comment after a `\\` continuation silently ends the "
+        f"logical line (v28's env-prefix bug). Move the comment above the "
+        f"whole command.\n" + "\n".join(offences)
+    )
+
+
+def test_no_comment_inside_line_continuation_in_built_notify(dist_dir):
+    with open(os.path.join(dist_dir, "install.sh"), encoding="utf-8") as f:
+        body = _extract_heredoc(f.read(), "NOTIFY_SCRIPT")
+    assert body is not None, "NOTIFY_SCRIPT heredoc not found in dist/install.sh"
+    offences = _continuation_comment_offences(body)
+    assert not offences, (
+        "built notify.sh: comment inside a `\\` continuation\n" + "\n".join(offences)
+    )
+
+
+ENVELOPE_ENV_VARS = [
+    "VIBEMON_EVT", "VIBEMON_AGENT", "VIBEMON_CWD", "VIBEMON_ROOT",
+    "VIBEMON_REPO", "VIBEMON_BRANCH", "VIBEMON_HEAD", "VIBEMON_TS",
+    "VIBEMON_FILE", "VIBEMON_NO_COMMIT_MSG",
+]
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="runs the Unix notify.sh envelope block; Windows goes through notify.py",
+)
+def test_envelope_env_prefix_reaches_python(dist_dir, tmp_path):
+    """Execute the real env-prefix block from the BUILT notify.sh and assert
+    python3 receives every VIBEMON_* variable.
+
+    Syntax checks cannot catch this class of defect and the parity tests
+    supply the environment themselves, so this is the only test that proves
+    the shell half of the contract."""
+    with open(os.path.join(dist_dir, "install.sh"), encoding="utf-8") as f:
+        notify = _extract_heredoc(f.read(), "NOTIFY_SCRIPT")
+    assert notify is not None, "NOTIFY_SCRIPT heredoc not found in dist/install.sh"
+
+    m = re.search(
+        r"(VIBEMON_EVT=\"\$EVENT_TYPE\".*?<< 'VIBEMON_PY'[^\n]*\n)"
+        r".*?"
+        r"(\nVIBEMON_PY\n)",
+        notify, re.DOTALL,
+    )
+    assert m, "envelope env-prefix block not found in built notify.sh"
+    probe = (
+        'import json, os\n'
+        'print(json.dumps({k: v for k, v in os.environ.items() '
+        'if k.startswith("VIBEMON_")}))'
+    )
+    # Drop 2>/dev/null so a broken probe surfaces instead of looking empty.
+    block = (m.group(1).replace(" 2>/dev/null", "") + probe + m.group(2))
+
+    out = tmp_path / "envelope.json"
+    payload = tmp_path / "payload.json"
+    payload.write_text("{}", encoding="utf-8")
+    script = tmp_path / "block.sh"
+    script.write_text(
+        "set -euo pipefail\n"
+        'EVENT_TYPE="prompt"\n'
+        'AGENT="claude"\n'
+        'PROJECT_ROOT="proj"\n'
+        'REPO_IDENTIFIER="acme/proj"\n'
+        'GIT_BRANCH="main"\n'
+        'GIT_HEAD="0123456789abcdef"\n'
+        f'STDIN_FILE="{payload}"\n'
+        'NO_COMMIT_MSG="0"\n'
+        f'ENV_FILE="{out}"\n'
+        + block,
+        encoding="utf-8",
+    )
+
+    r = subprocess.run(["bash", str(script)], capture_output=True, text=True)
+    assert r.returncode == 0, f"block failed:\nstdout: {r.stdout}\nstderr: {r.stderr}"
+    assert out.exists(), "block produced no envelope file"
+
+    seen = json.loads(out.read_text(encoding="utf-8") or "{}")
+    missing = [v for v in ENVELOPE_ENV_VARS if v not in seen]
+    assert not missing, (
+        "python3 did not inherit the env prefix — the assignments became "
+        f"shell variables (v28 bug). Missing: {missing}"
+    )
+    assert seen["VIBEMON_EVT"] == "prompt"
+    assert seen["VIBEMON_AGENT"] == "claude"
+    assert seen["VIBEMON_REPO"] == "acme/proj"
