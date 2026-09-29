@@ -1,5 +1,41 @@
 # Changelog
 
+## v31 — 2026-09-29
+
+One edge-function invocation per tool call took every Supabase project down.
+
+### What happened
+- `bash` and `activity` fire on every tool call. On 2026-09-28 they were
+  88% of the 136k events `/hook` received, each its own invocation — 3.8M
+  in the billing cycle against an org-wide quota of 2M. With the spend cap
+  on, Supabase restricted the whole organization for ~9 h on 2026-09-29
+  (VibeMon and every other product sharing it).
+
+### Coalescing
+- A session now sends `bash`/`activity` at most once per 60 s. The first
+  one after a quiet minute still goes out at once, so the app flips to
+  "running" immediately; the rest are appended to
+  `~/.vibemon/spool/<session>.jsonl` and ride along with the next send —
+  the next `bash`/`activity` past the window, or any other event.
+- `prompt`, `stop`, `permission`, `tool_failure` and `session_*` are never
+  held back, so "needs you" and turn ends stay instant.
+- A send with queued events goes out as `{"batch":[…]}` (oldest first, the
+  triggering event last). `/hook` replays each envelope through the normal
+  path with its own `timestamp` as `created_at`. Measured on the last 24 h
+  of real traffic: 70% fewer invocations at a 30 s window, 78% at 60 s.
+- `session_start` also sweeps spools left by agents that died before their
+  `stop`/`session_end` (untouched for 10+ min); stamps older than 7 days
+  are removed. A spool never holds more than 50 events.
+- The body now goes through curl's stdin (`--data-binary @-`) instead of
+  `-d`: a batch can outgrow Linux's 128 KiB single-argument limit.
+- `notify.py` (Windows) is the same state machine; `tests/test_coalesce.py`
+  pins both, the shell one end-to-end against the built `install.sh`.
+
+### Server
+- Requires the `/hook` that accepts `{"batch":[…]}` (vibemon-app,
+  deployed before this release). Older clients keep sending single
+  envelopes and are unaffected.
+
 ## v30 — 2026-08-31
 
 Collection has been dead since v28 shipped on 2026-08-26. One comment did it.

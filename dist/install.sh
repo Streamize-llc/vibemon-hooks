@@ -21,7 +21,7 @@ fi
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="30"
+VIBEMON_VERSION="31"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -1162,19 +1162,86 @@ if [ "$EVENT_TYPE" = "test" ]; then
     exit 1
   fi
 else
-  # Fire-and-forget. disown + </dev/null prevents SIGHUP loss when the
-  # parent agent process exits right after firing the hook (critical for
-  # session_end which fires immediately before the agent disappears).
-  # nohup: disown only stops bash from forwarding HUP — the child keeps the
-  # parent's process group, so a closing terminal still kills an in-flight
-  # curl (measured). nohup makes curl ignore HUP outright, which is what
-  # session_end needs: it fires at the exact moment the terminal goes away.
-  (nohup curl -s --max-time 15 -X POST "$API_URL/hook" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $API_KEY" \
-    -H "X-Vibemon-Version: $VIBEMON_VER" \
-    -d "$HOOK_BODY" \
-    </dev/null >/dev/null 2>&1) & disown 2>/dev/null || true
+  # ─── Coalesce the per-tool-call events (v31) ──────────────────────
+  # bash + activity fire on EVERY tool call and were ~88% of all /hook
+  # traffic (136k events/day on 2026-09-28) — one edge-function
+  # invocation each, which pushed the Supabase org past its quota and
+  # got every project restricted for ~9 h on 2026-09-29. A session now
+  # sends those two at most once per COALESCE_WINDOW: the first one after
+  # a quiet window still goes out at once (the app flips to "running"
+  # right away), later ones are appended to a per-session spool and ride
+  # along with the next send — the next bash/activity past the window, or
+  # any other event, none of which is ever held back. /hook replays a
+  # {"batch":[…]} in order with each envelope's own timestamp. The app's
+  # idle TTL is 5 min, so a spooled event's delay never changes state.
+  COALESCE_WINDOW=60
+  COALESCE_MAX=50
+  SPOOL_DIR="$VIBEMON_DIR/spool"
+  mkdir -p "$SPOOL_DIR" 2>/dev/null || true
+  SID=$(sed -n 's/.*"session_id": *"\([^"]*\)".*/\1/p' "$ENV_FILE" 2>/dev/null | head -n 1 || true)
+  SID=$(printf '%s' "${SID:-nosession}" | tr -c 'A-Za-z0-9_-' '_' | cut -c 1-80)
+  SPOOL="$SPOOL_DIR/$SID.jsonl"
+  STAMP="$SPOOL_DIR/$SID.sent"
+  NOW=$(date +%s)
+  SEND=1
+  case "$EVENT_TYPE" in
+    bash|activity)
+      LAST=$(cat "$STAMP" 2>/dev/null || echo 0)
+      case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
+      QUEUED=0
+      if [ -f "$SPOOL" ]; then
+        QUEUED=$(wc -l < "$SPOOL" | tr -d ' ')
+      fi
+      if [ $(( NOW - LAST )) -lt "$COALESCE_WINDOW" ] && [ "$QUEUED" -lt "$COALESCE_MAX" ]; then
+        printf '%s\n' "$HOOK_BODY" >> "$SPOOL"
+        SEND=0
+      fi
+      ;;
+  esac
+
+  if [ "$SEND" = 1 ]; then
+    printf '%s' "$NOW" > "$STAMP" 2>/dev/null || true
+    # Take the spool with an atomic mv: an event appended after it starts
+    # a fresh spool instead of disappearing with this one.
+    QUEUE=""
+    if [ -f "$SPOOL" ] && mv "$SPOOL" "$SPOOL.$$" 2>/dev/null; then
+      QUEUE=$(grep -v '^[[:space:]]*$' "$SPOOL.$$" | paste -s -d , - || true)
+      rm -f "$SPOOL.$$"
+    fi
+    # A new session also sweeps spools orphaned by agents that died before
+    # their stop/session_end (untouched for 10+ min).
+    if [ "$EVENT_TYPE" = "session_start" ]; then
+      for _f in $(find "$SPOOL_DIR" -name '*.jsonl' -mmin +10 2>/dev/null || true); do
+        if mv "$_f" "$_f.$$" 2>/dev/null; then
+          _q=$(grep -v '^[[:space:]]*$' "$_f.$$" | paste -s -d , - || true)
+          rm -f "$_f.$$"
+          if [ -n "$_q" ]; then
+            QUEUE="${QUEUE:+$QUEUE,}$_q"
+          fi
+        fi
+      done
+      find "$SPOOL_DIR" -name '*.sent' -mtime +7 -exec rm -f {} + 2>/dev/null || true
+    fi
+    if [ -n "$QUEUE" ]; then
+      HOOK_BODY="{\"batch\":[$QUEUE,$HOOK_BODY]}"
+    fi
+
+    # Fire-and-forget. disown + a non-terminal stdin prevent SIGHUP loss
+    # when the parent agent process exits right after firing the hook
+    # (critical for session_end which fires immediately before the agent
+    # disappears). nohup: disown only stops bash from forwarding HUP — the
+    # child keeps the parent's process group, so a closing terminal still
+    # kills an in-flight curl (measured). nohup makes curl ignore HUP
+    # outright, which is what session_end needs: it fires at the exact
+    # moment the terminal goes away. The body goes through stdin, not -d: a
+    # batch can outgrow Linux's 128 KiB single-argument limit.
+    (printf '%s' "$HOOK_BODY" | nohup curl -s --max-time 30 -X POST "$API_URL/hook" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $API_KEY" \
+      -H "X-Vibemon-Version: $VIBEMON_VER" \
+      --data-binary @- \
+      >/dev/null 2>&1) & disown 2>/dev/null || true
+  fi
 fi
 
 # Gemini CLI requires a JSON stdout response to allow the hook to proceed.

@@ -19,6 +19,7 @@ Stdlib only.
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -241,11 +242,112 @@ def _spawn_post(body, api_key, version):
         "    },\n"
         ")\n"
         "try:\n"
-        "    urllib.request.urlopen(req, timeout=10).read()\n"
+        "    urllib.request.urlopen(req, timeout=30).read()\n"
         "except Exception:\n"
         "    pass\n"
     ) % (API_URL, api_key, version)
     _spawn_detached([sys.executable, "-c", helper], payload=body)
+
+
+# ─── Coalescing (v31) — twin of notify.sh's spool ───────────────────
+# bash + activity fire on every tool call and were ~88% of all /hook
+# traffic; one edge-function invocation each got the Supabase org
+# restricted on 2026-09-29. A session sends those two at most once per
+# COALESCE_WINDOW; later ones wait in a per-session spool and ride along
+# with the next send as {"batch":[…]}, which /hook replays in order with
+# each envelope's own timestamp. Every other event goes out immediately.
+COALESCE_WINDOW = 60
+COALESCE_MAX = 50
+COALESCED_EVENTS = ("bash", "activity")
+ORPHAN_SPOOL_SECONDS = 600
+
+
+def _spool_paths(env):
+    sid = str(env.get("session_id") or "nosession")
+    sid = re.sub(r"[^A-Za-z0-9_-]", "_", sid)[:80]
+    spool_dir = os.path.join(_vibemon_dir(), "spool")
+    return (
+        spool_dir,
+        os.path.join(spool_dir, sid + ".jsonl"),
+        os.path.join(spool_dir, sid + ".sent"),
+    )
+
+
+def _take_spool(path):
+    """Atomically claim a spool file and return its non-blank lines. An
+    event appended after the rename starts a fresh spool."""
+    claimed = "%s.%d" % (path, os.getpid())
+    try:
+        os.replace(path, claimed)
+    except OSError:
+        return []
+    try:
+        with open(claimed, encoding="utf-8") as f:
+            return [line.strip() for line in f if line.strip()]
+    except (OSError, UnicodeDecodeError):
+        return []
+    finally:
+        try:
+            os.remove(claimed)
+        except OSError:
+            pass
+
+
+def _coalesce(event, env, line, now=None):
+    """Return the body to POST now, or None when the event was spooled."""
+    now = int(time.time()) if now is None else now
+    spool_dir, spool, stamp = _spool_paths(env)
+    try:
+        os.makedirs(spool_dir, exist_ok=True)
+    except OSError:
+        return line  # can't spool → behave like v30
+
+    if event in COALESCED_EVENTS:
+        last = _read_text(stamp, "0")
+        last = int(last) if last.isdigit() else 0
+        try:
+            with open(spool, encoding="utf-8") as f:
+                queued = sum(1 for _ in f)
+        except (OSError, UnicodeDecodeError):
+            queued = 0
+        if now - last < COALESCE_WINDOW and queued < COALESCE_MAX:
+            try:
+                with open(spool, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+                return None
+            except OSError:
+                return line
+
+    try:
+        with open(stamp, "w", encoding="utf-8") as f:
+            f.write(str(now))
+    except OSError:
+        pass
+
+    queue = _take_spool(spool)
+    if event == "session_start":
+        # Sweep spools orphaned by agents that died before stop/session_end.
+        try:
+            names = os.listdir(spool_dir)
+        except OSError:
+            names = []
+        for name in names:
+            path = os.path.join(spool_dir, name)
+            try:
+                age = now - os.path.getmtime(path)
+            except OSError:
+                continue
+            if name.endswith(".jsonl") and age > ORPHAN_SPOOL_SECONDS:
+                queue.extend(_take_spool(path))
+            elif name.endswith(".sent") and age > 7 * 86400:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+    if queue:
+        return '{"batch":[' + ",".join(queue + [line]) + "]}"
+    return line
 
 
 # ─── Envelope build ─────────────────────────────────────────────────
@@ -324,7 +426,9 @@ def _fire(event, agent, payload):
             sys.stderr.write("[vibemon] ✗ Connection failed: %s\n" % e)
             return 1
 
-    _spawn_post(body, api_key, version)
+    to_send = _coalesce(event, env, body.decode("utf-8"))
+    if to_send is not None:
+        _spawn_post(to_send.encode("utf-8"), api_key, version)
 
     # Gemini CLI requires JSON stdout to allow the hook to proceed.
     if agent == "gemini_cli":
