@@ -145,6 +145,36 @@ NOTIFY_SCRIPT
 chmod 0755 "$VIBEMON_DIR/notify.sh"
 echo "  ✓ notify.sh installed"
 
+# ─── 4b. Remove an AttemptDB install (v32) ───────────────────────────
+# From 2026-09-03 to 2026-11-08 vibemon.dev's one-liner installed
+# AttemptDB, which writes its own agent hooks, OTEL settings and a
+# background service. The merges below only recognise VibeMon's own hooks
+# ("vibemon" in the command), so a machine with both would count every
+# event twice. `attempt uninstall` removes exactly what AttemptDB wrote
+# (hooks in ~/.claude* and the other agents, OTEL env, the launchd /
+# systemd / session service) and keeps its local database and binary.
+# stdin is /dev/null on purpose: under `curl | bash` the rest of this
+# script is on stdin. Run from $HOME so no project-local data dir is used.
+ATTEMPT_BIN=""
+for _c in "${ATTEMPTDB_BIN_DIR:+$ATTEMPTDB_BIN_DIR/attempt}" "$HOME/.local/bin/attempt" "$(command -v attempt 2>/dev/null || true)"; do
+  [ -n "$_c" ] && [ -x "$_c" ] || continue
+  # Captured, not piped into grep: under pipefail an early-exiting grep
+  # can fail the pipeline. Only the AttemptDB CLI prints "attempt <ver>".
+  _v=$("$_c" --version </dev/null 2>/dev/null || true)
+  case "$_v" in
+    "attempt "*) ATTEMPT_BIN="$_c"; break ;;
+  esac
+done
+if [ -n "$ATTEMPT_BIN" ]; then
+  (cd "$HOME" && "$ATTEMPT_BIN" daemon stop </dev/null >/dev/null 2>&1) || true
+  if (cd "$HOME" && "$ATTEMPT_BIN" uninstall </dev/null >/dev/null 2>&1); then
+    echo "  ✓ Previous AttemptDB connector removed (its local data is kept)"
+  else
+    echo "  ⚠ Could not fully remove the previous AttemptDB connector."
+    echo "    Run '$ATTEMPT_BIN uninstall' once so activity is not counted twice."
+  fi
+fi
+
 # ─── 5a. Merge Claude Code hooks ─────────────────────────────────────
 # lock.py is embedded above merge_claude.py so the FileLock symbol is
 # already in module scope when the merge script's `from lock import

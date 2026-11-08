@@ -198,6 +198,24 @@ else
       ;;
   esac
 
+  # Fire-and-forget. disown + a non-terminal stdin prevent SIGHUP loss
+  # when the parent agent process exits right after firing the hook
+  # (critical for session_end which fires immediately before the agent
+  # disappears). nohup: disown only stops bash from forwarding HUP — the
+  # child keeps the parent's process group, so a closing terminal still
+  # kills an in-flight curl (measured). nohup makes curl ignore HUP
+  # outright, which is what session_end needs: it fires at the exact
+  # moment the terminal goes away. The body goes through stdin, not -d: a
+  # batch can outgrow Linux's 128 KiB single-argument limit.
+  _vibemon_post() {
+    (printf '%s' "$1" | nohup curl -s --max-time 30 -X POST "$API_URL/hook" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $API_KEY" \
+      -H "X-Vibemon-Version: $VIBEMON_VER" \
+      --data-binary @- \
+      >/dev/null 2>&1) & disown 2>/dev/null || true
+  }
+
   if [ "$SEND" = 1 ]; then
     printf '%s' "$NOW" > "$STAMP" 2>/dev/null || true
     # Take the spool with an atomic mv: an event appended after it starts
@@ -207,39 +225,28 @@ else
       QUEUE=$(grep -v '^[[:space:]]*$' "$SPOOL.$$" | paste -s -d , - || true)
       rm -f "$SPOOL.$$"
     fi
+    if [ -n "$QUEUE" ]; then
+      HOOK_BODY="{\"batch\":[$QUEUE,$HOOK_BODY]}"
+    fi
+    _vibemon_post "$HOOK_BODY"
+
     # A new session also sweeps spools orphaned by agents that died before
-    # their stop/session_end (untouched for 10+ min).
+    # their stop/session_end (untouched for 10+ min). One POST per spool
+    # (v32): a spool holds at most ~COALESCE_MAX lines, so each batch stays
+    # under /hook's MAX_BATCH (100). Merged into one batch, several spools
+    # could exceed it, and /hook keeps only the newest 100.
     if [ "$EVENT_TYPE" = "session_start" ]; then
       for _f in $(find "$SPOOL_DIR" -name '*.jsonl' -mmin +10 2>/dev/null || true); do
         if mv "$_f" "$_f.$$" 2>/dev/null; then
           _q=$(grep -v '^[[:space:]]*$' "$_f.$$" | paste -s -d , - || true)
           rm -f "$_f.$$"
           if [ -n "$_q" ]; then
-            QUEUE="${QUEUE:+$QUEUE,}$_q"
+            _vibemon_post "{\"batch\":[$_q]}"
           fi
         fi
       done
       find "$SPOOL_DIR" -name '*.sent' -mtime +7 -exec rm -f {} + 2>/dev/null || true
     fi
-    if [ -n "$QUEUE" ]; then
-      HOOK_BODY="{\"batch\":[$QUEUE,$HOOK_BODY]}"
-    fi
-
-    # Fire-and-forget. disown + a non-terminal stdin prevent SIGHUP loss
-    # when the parent agent process exits right after firing the hook
-    # (critical for session_end which fires immediately before the agent
-    # disappears). nohup: disown only stops bash from forwarding HUP — the
-    # child keeps the parent's process group, so a closing terminal still
-    # kills an in-flight curl (measured). nohup makes curl ignore HUP
-    # outright, which is what session_end needs: it fires at the exact
-    # moment the terminal goes away. The body goes through stdin, not -d: a
-    # batch can outgrow Linux's 128 KiB single-argument limit.
-    (printf '%s' "$HOOK_BODY" | nohup curl -s --max-time 30 -X POST "$API_URL/hook" \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $API_KEY" \
-      -H "X-Vibemon-Version: $VIBEMON_VER" \
-      --data-binary @- \
-      >/dev/null 2>&1) & disown 2>/dev/null || true
   fi
 fi
 

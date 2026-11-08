@@ -21,7 +21,7 @@ fi
 set -euo pipefail
 
 # ─── Pre-flight checks ───────────────────────────────────────────────
-VIBEMON_VERSION="31"
+VIBEMON_VERSION="32"
 
 # CLI args: one positional API_KEY + optional flags. Flags:
 #   --no-commit-msg       force commit message collection OFF in config
@@ -1199,6 +1199,24 @@ else
       ;;
   esac
 
+  # Fire-and-forget. disown + a non-terminal stdin prevent SIGHUP loss
+  # when the parent agent process exits right after firing the hook
+  # (critical for session_end which fires immediately before the agent
+  # disappears). nohup: disown only stops bash from forwarding HUP — the
+  # child keeps the parent's process group, so a closing terminal still
+  # kills an in-flight curl (measured). nohup makes curl ignore HUP
+  # outright, which is what session_end needs: it fires at the exact
+  # moment the terminal goes away. The body goes through stdin, not -d: a
+  # batch can outgrow Linux's 128 KiB single-argument limit.
+  _vibemon_post() {
+    (printf '%s' "$1" | nohup curl -s --max-time 30 -X POST "$API_URL/hook" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $API_KEY" \
+      -H "X-Vibemon-Version: $VIBEMON_VER" \
+      --data-binary @- \
+      >/dev/null 2>&1) & disown 2>/dev/null || true
+  }
+
   if [ "$SEND" = 1 ]; then
     printf '%s' "$NOW" > "$STAMP" 2>/dev/null || true
     # Take the spool with an atomic mv: an event appended after it starts
@@ -1208,39 +1226,28 @@ else
       QUEUE=$(grep -v '^[[:space:]]*$' "$SPOOL.$$" | paste -s -d , - || true)
       rm -f "$SPOOL.$$"
     fi
+    if [ -n "$QUEUE" ]; then
+      HOOK_BODY="{\"batch\":[$QUEUE,$HOOK_BODY]}"
+    fi
+    _vibemon_post "$HOOK_BODY"
+
     # A new session also sweeps spools orphaned by agents that died before
-    # their stop/session_end (untouched for 10+ min).
+    # their stop/session_end (untouched for 10+ min). One POST per spool
+    # (v32): a spool holds at most ~COALESCE_MAX lines, so each batch stays
+    # under /hook's MAX_BATCH (100). Merged into one batch, several spools
+    # could exceed it, and /hook keeps only the newest 100.
     if [ "$EVENT_TYPE" = "session_start" ]; then
       for _f in $(find "$SPOOL_DIR" -name '*.jsonl' -mmin +10 2>/dev/null || true); do
         if mv "$_f" "$_f.$$" 2>/dev/null; then
           _q=$(grep -v '^[[:space:]]*$' "$_f.$$" | paste -s -d , - || true)
           rm -f "$_f.$$"
           if [ -n "$_q" ]; then
-            QUEUE="${QUEUE:+$QUEUE,}$_q"
+            _vibemon_post "{\"batch\":[$_q]}"
           fi
         fi
       done
       find "$SPOOL_DIR" -name '*.sent' -mtime +7 -exec rm -f {} + 2>/dev/null || true
     fi
-    if [ -n "$QUEUE" ]; then
-      HOOK_BODY="{\"batch\":[$QUEUE,$HOOK_BODY]}"
-    fi
-
-    # Fire-and-forget. disown + a non-terminal stdin prevent SIGHUP loss
-    # when the parent agent process exits right after firing the hook
-    # (critical for session_end which fires immediately before the agent
-    # disappears). nohup: disown only stops bash from forwarding HUP — the
-    # child keeps the parent's process group, so a closing terminal still
-    # kills an in-flight curl (measured). nohup makes curl ignore HUP
-    # outright, which is what session_end needs: it fires at the exact
-    # moment the terminal goes away. The body goes through stdin, not -d: a
-    # batch can outgrow Linux's 128 KiB single-argument limit.
-    (printf '%s' "$HOOK_BODY" | nohup curl -s --max-time 30 -X POST "$API_URL/hook" \
-      -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $API_KEY" \
-      -H "X-Vibemon-Version: $VIBEMON_VER" \
-      --data-binary @- \
-      >/dev/null 2>&1) & disown 2>/dev/null || true
   fi
 fi
 
@@ -1252,6 +1259,36 @@ NOTIFY_SCRIPT
 
 chmod 0755 "$VIBEMON_DIR/notify.sh"
 echo "  ✓ notify.sh installed"
+
+# ─── 4b. Remove an AttemptDB install (v32) ───────────────────────────
+# From 2026-09-03 to 2026-11-08 vibemon.dev's one-liner installed
+# AttemptDB, which writes its own agent hooks, OTEL settings and a
+# background service. The merges below only recognise VibeMon's own hooks
+# ("vibemon" in the command), so a machine with both would count every
+# event twice. `attempt uninstall` removes exactly what AttemptDB wrote
+# (hooks in ~/.claude* and the other agents, OTEL env, the launchd /
+# systemd / session service) and keeps its local database and binary.
+# stdin is /dev/null on purpose: under `curl | bash` the rest of this
+# script is on stdin. Run from $HOME so no project-local data dir is used.
+ATTEMPT_BIN=""
+for _c in "${ATTEMPTDB_BIN_DIR:+$ATTEMPTDB_BIN_DIR/attempt}" "$HOME/.local/bin/attempt" "$(command -v attempt 2>/dev/null || true)"; do
+  [ -n "$_c" ] && [ -x "$_c" ] || continue
+  # Captured, not piped into grep: under pipefail an early-exiting grep
+  # can fail the pipeline. Only the AttemptDB CLI prints "attempt <ver>".
+  _v=$("$_c" --version </dev/null 2>/dev/null || true)
+  case "$_v" in
+    "attempt "*) ATTEMPT_BIN="$_c"; break ;;
+  esac
+done
+if [ -n "$ATTEMPT_BIN" ]; then
+  (cd "$HOME" && "$ATTEMPT_BIN" daemon stop </dev/null >/dev/null 2>&1) || true
+  if (cd "$HOME" && "$ATTEMPT_BIN" uninstall </dev/null >/dev/null 2>&1); then
+    echo "  ✓ Previous AttemptDB connector removed (its local data is kept)"
+  else
+    echo "  ⚠ Could not fully remove the previous AttemptDB connector."
+    echo "    Run '$ATTEMPT_BIN uninstall' once so activity is not counted twice."
+  fi
+fi
 
 # ─── 5a. Merge Claude Code hooks ─────────────────────────────────────
 # lock.py is embedded above merge_claude.py so the FileLock symbol is

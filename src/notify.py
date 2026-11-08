@@ -325,29 +325,40 @@ def _coalesce(event, env, line, now=None):
         pass
 
     queue = _take_spool(spool)
-    if event == "session_start":
-        # Sweep spools orphaned by agents that died before stop/session_end.
-        try:
-            names = os.listdir(spool_dir)
-        except OSError:
-            names = []
-        for name in names:
-            path = os.path.join(spool_dir, name)
-            try:
-                age = now - os.path.getmtime(path)
-            except OSError:
-                continue
-            if name.endswith(".jsonl") and age > ORPHAN_SPOOL_SECONDS:
-                queue.extend(_take_spool(path))
-            elif name.endswith(".sent") and age > 7 * 86400:
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-
     if queue:
         return '{"batch":[' + ",".join(queue + [line]) + "]}"
     return line
+
+
+def _sweep_orphans(env, now=None):
+    """Bodies for spools orphaned by agents that died before stop/session_end
+    (run on session_start). One body per spool (v32): a spool holds at most
+    ~COALESCE_MAX lines, so each body stays under /hook's MAX_BATCH (100);
+    merging several spools into one batch could exceed it, and /hook keeps
+    only the newest 100 — the oldest events were silently dropped."""
+    now = int(time.time()) if now is None else now
+    spool_dir = _spool_paths(env)[0]
+    try:
+        names = os.listdir(spool_dir)
+    except OSError:
+        return []
+    bodies = []
+    for name in sorted(names):
+        path = os.path.join(spool_dir, name)
+        try:
+            age = now - os.path.getmtime(path)
+        except OSError:
+            continue
+        if name.endswith(".jsonl") and age > ORPHAN_SPOOL_SECONDS:
+            lines = _take_spool(path)
+            if lines:
+                bodies.append('{"batch":[' + ",".join(lines) + "]}")
+        elif name.endswith(".sent") and age > 7 * 86400:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    return bodies
 
 
 # ─── Envelope build ─────────────────────────────────────────────────
@@ -429,6 +440,9 @@ def _fire(event, agent, payload):
     to_send = _coalesce(event, env, body.decode("utf-8"))
     if to_send is not None:
         _spawn_post(to_send.encode("utf-8"), api_key, version)
+    if event == "session_start":
+        for orphan in _sweep_orphans(env):
+            _spawn_post(orphan.encode("utf-8"), api_key, version)
 
     # Gemini CLI requires JSON stdout to allow the hook to proceed.
     if agent == "gemini_cli":

@@ -1,4 +1,4 @@
-"""Coalescing of the per-tool-call events (v31).
+"""Coalescing of the per-tool-call events (v31; orphan sweep split in v32).
 
 bash + activity fire on every tool call and were ~88% of /hook traffic.
 A session now sends them at most once per COALESCE_WINDOW; the rest wait
@@ -74,17 +74,29 @@ def test_sessions_do_not_share_a_spool(vhome):
     assert json.loads(_send("bash", sid="b", now=1_000_002))["event"] == "bash"
 
 
-def test_session_start_sweeps_orphaned_spools(vhome):
-    _send("bash", sid="dead", now=1_000_000)
-    _send("bash", sid="dead", now=1_000_001, ts="orphan")
+def test_session_start_sweeps_each_orphaned_spool_separately(vhome):
+    # v32: one body per orphaned spool, so no POST can outgrow /hook's
+    # MAX_BATCH (100) — merged, several spools could, and /hook keeps only
+    # the newest 100.
     spool_dir = os.path.join(str(vhome), ".vibemon", "spool")
     old = time.time() - notify.ORPHAN_SPOOL_SECONDS - 60
-    os.utime(os.path.join(spool_dir, "dead.jsonl"), (old, old))
-    body = json.loads(notify._coalesce(
-        "session_start", {"session_id": "new"}, _line("session_start", "new", "now"),
-        now=int(time.time()),
-    ))
-    assert [e["timestamp"] for e in body["batch"]] == ["orphan", "now"]
+    for sid in ("dead1", "dead2"):
+        _send("bash", sid=sid, now=1_000_000)
+        _send("bash", sid=sid, now=1_000_001, ts="orphan-" + sid)
+        os.utime(os.path.join(spool_dir, sid + ".jsonl"), (old, old))
+    now = int(time.time())
+    env = {"session_id": "new"}
+    body = json.loads(notify._coalesce("session_start", env, _line("session_start", "new", "now"), now=now))
+    assert body["event"] == "session_start", "orphans no longer ride with the session_start"
+    orphans = [json.loads(b) for b in notify._sweep_orphans(env, now=now)]
+    assert [[e["timestamp"] for e in b["batch"]] for b in orphans] == [["orphan-dead1"], ["orphan-dead2"]]
+    assert notify._sweep_orphans(env, now=now) == [], "a spool is taken once"
+
+
+def test_fresh_spools_are_not_swept(vhome):
+    _send("bash", sid="live", now=1_000_000)
+    _send("bash", sid="live", now=1_000_001, ts="held")
+    assert notify._sweep_orphans({"session_id": "new"}, now=int(time.time())) == []
 
 
 def test_session_id_is_sanitized_into_a_file_name(vhome):
@@ -181,3 +193,23 @@ def test_built_notify_sh_coalesces_bash_until_stop(sh_env):
     assert len(sent) == 1
     assert [e["event"] for e in sent[0]["batch"]] == ["bash", "stop"]
     assert not spool.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix notify.sh; Windows goes through notify.py")
+def test_built_notify_sh_sends_each_orphaned_spool_separately(sh_env):
+    spool_dir = sh_env[4] / "spool"
+    spool_dir.mkdir(exist_ok=True)
+    old = time.time() - 15 * 60
+    for sid in ("dead1", "dead2"):
+        p = spool_dir / (sid + ".jsonl")
+        p.write_text(json.dumps({"event": "bash", "timestamp": "orphan-" + sid}) + "\n", encoding="utf-8")
+        os.utime(p, (old, old))
+
+    b = _fire_sh(sh_env, "session_start", {"session_id": "new"})
+    sent = _bodies_after(sh_env, b, 3)
+    assert len(sent) == 3
+    plain = [x for x in sent if "batch" not in x]
+    batches = sorted([e["timestamp"] for e in x["batch"]] for x in sent if "batch" in x)
+    assert len(plain) == 1 and plain[0]["event"] == "session_start"
+    assert batches == [["orphan-dead1"], ["orphan-dead2"]]
+    assert not list(spool_dir.glob("*.jsonl"))

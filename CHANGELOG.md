@@ -1,5 +1,33 @@
 # Changelog
 
+## v32 — 2026-11-08
+
+vibemon.dev goes back to this client as its only installer; v32 cleans up
+after the AttemptDB connector it handed out in between, and ships v31's
+coalescing (v31 itself never reached the auto-update channel).
+
+### AttemptDB cleanup
+- From 2026-09-03 to 2026-11-08 the vibemon.dev one-liner installed the
+  AttemptDB connector. Its hooks don't contain "vibemon", so the merges
+  left them in place and a machine with both counted every event twice.
+- Before merging, both installers look for the AttemptDB CLI
+  (`$ATTEMPTDB_BIN_DIR`, `~/.local/bin`, `%LOCALAPPDATA%\AttemptDB\bin`,
+  then PATH; only a binary whose `--version` reads `attempt <ver>`) and run
+  `attempt daemon stop` and `attempt uninstall` from `$HOME` with stdin
+  closed. `uninstall` removes exactly what AttemptDB wrote — agent hooks
+  (including `~/.claude*` siblings), OTEL settings and the launchd /
+  systemd / scheduled-task service — and keeps its local database and
+  binary. A failed uninstall prints a warning and the install continues.
+- `tests/test_attemptdb_cleanup.py` runs the built `install.sh` section and
+  `install.py` against a fake CLI, with PATH pinned so a real one is never
+  touched.
+
+### Coalescing
+- `session_start` sends each orphaned spool as its own `{"batch":[…]}`
+  instead of merging them into its own body. A spool holds at most ~50
+  events, so no POST can pass `/hook`'s `MAX_BATCH` (100); merged, several
+  spools could, and `/hook` keeps only the newest 100.
+
 ## v31 — 2026-09-29
 
 One edge-function invocation per tool call took every Supabase project down.

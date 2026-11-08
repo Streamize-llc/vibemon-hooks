@@ -73,6 +73,62 @@ def _write_config(commit_msg_flag):
         print("  ✓ Config file created (%s)" % cfg_path)
 
 
+def _find_attempt():
+    """The AttemptDB CLI, if one is installed (v32). Checked by name and by
+    its `--version` line, so an unrelated `attempt` on PATH is left alone."""
+    import subprocess
+
+    exe = "attempt.exe" if os.name == "nt" else "attempt"
+    candidates = []
+    if os.environ.get("ATTEMPTDB_BIN_DIR"):
+        candidates.append(os.path.join(os.environ["ATTEMPTDB_BIN_DIR"], exe))
+    if os.environ.get("LOCALAPPDATA"):
+        candidates.append(os.path.join(os.environ["LOCALAPPDATA"], "AttemptDB", "bin", exe))
+    candidates.append(os.path.join(os.path.expanduser("~"), ".local", "bin", exe))
+    candidates.append(shutil.which("attempt"))
+    for c in candidates:
+        if not c or not os.path.isfile(c):
+            continue
+        try:
+            r = subprocess.run([c, "--version"], stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode == 0 and r.stdout.startswith("attempt "):
+            return c
+    return None
+
+
+def _remove_attemptdb():
+    """Twin of install.sh section 4b. From 2026-09-03 to 2026-11-08
+    vibemon.dev installed AttemptDB, whose hooks the merges below do not
+    recognise (they look for "vibemon"), so a machine with both would count
+    every event twice. `attempt uninstall` removes what AttemptDB wrote
+    (agent hooks, OTEL settings, the scheduled task / service) and keeps
+    its local database and binary."""
+    import subprocess
+
+    binary = _find_attempt()
+    if not binary:
+        return
+    home = os.path.expanduser("~")
+
+    def run(*args):
+        try:
+            return subprocess.run([binary] + list(args), stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  cwd=home, timeout=60).returncode
+        except (OSError, subprocess.SubprocessError):
+            return 1
+
+    run("daemon", "stop")
+    if run("uninstall") == 0:
+        print("  ✓ Previous AttemptDB connector removed (its local data is kept)")
+    else:
+        print("  ⚠ Could not fully remove the previous AttemptDB connector.")
+        print("    Run '%s uninstall' once so activity is not counted twice." % binary)
+
+
 def _has(executable_name, dot_dir_name):
     """Mirror install.sh's `command -v X || [ -d $HOME/.X ]` heuristic."""
     if shutil.which(executable_name):
@@ -139,6 +195,7 @@ def main(argv=None):
         print("  ✓ Version v%s recorded" % version)
 
     _write_config(commit_msg_flag)
+    _remove_attemptdb()
 
     # Compute the notify command prefix once. Quoted absolute paths so
     # spaces in user names ('C:\\Users\\Jane Doe\\...') don't break.
