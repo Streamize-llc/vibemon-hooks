@@ -33,6 +33,7 @@ For each agent hook event, the envelope POSTed to `/hook` contains:
 | `timestamp` | UTC ISO-8601 | When the hook fired. |
 | `local_hour` | `23` | Time-of-day for narrative ("nocturnal coder"). |
 | `local_dow` | `2` | Day of week. |
+| `transcript_path` | `/Users/x/.claude/projects/…/abc.jsonl` | Passed through from the agent's hook input: the local path of its session log. The path only — the file is never read or sent. |
 | `signals.*` | see below | Derived behavioral signals. |
 
 ### Signal categories we derive
@@ -163,7 +164,10 @@ writes your `vbm_*` API key into those files as an `Authorization`
 header — the same key already stored at `~/.vibemon/api-key`. The MCP
 server lets your AI agents read/write **your own** VibeMon data (team
 TODOs, team membership) over HTTPS; it adds no new telemetry from your
-machine, and the privacy model above is unchanged. If either config
+machine, and the privacy model above is unchanged. Since 2026-11-13 the
+server counts how many times each VibeMon tool is called per user per
+day (the tool name and a success/error count — never the arguments or
+the result), to learn which tools agents actually use. If either config
 file cannot be parsed, registration is skipped and the file is left
 exactly as it was. To disconnect, remove the `mcpServers.vibemon`
 entry.
