@@ -33,7 +33,7 @@ For each agent hook event, the envelope POSTed to `/hook` contains:
 | `timestamp` | UTC ISO-8601 | When the hook fired. |
 | `local_hour` | `23` | Time-of-day for narrative ("nocturnal coder"). |
 | `local_dow` | `2` | Day of week. |
-| `transcript_path` | `/Users/x/.claude/projects/…/abc.jsonl` | Passed through from the agent's hook input: the local path of its session log. The path only — the file is never read or sent. |
+| `transcript_path` | `/Users/x/.claude/projects/…/abc.jsonl` | v32 clients still pass the agent's session-log path through; **the server discards it** (not stored since 2026-11-13). The file itself is never read or sent. |
 | `signals.*` | see below | Derived behavioral signals. |
 
 ### Signal categories we derive
@@ -117,6 +117,16 @@ take effect on the next hook fire — no restart needed.
 3. **GitHub Actions** — `test.yml` runs the canary suite on every PR
    on Ubuntu + macOS, Python 3.10 + 3.12.
 
+4. **Server allowlist (since 2026-11-13)** — the `/hook` endpoint stores
+   only the documented signal keys (type-checked) and routing payload
+   fields; anything else, including `transcript_path`, is dropped
+   (`vibemon-app/supabase/functions/_shared/hookPrivacy.ts`, with its own
+   canary tests). Text that agents write on purpose — a `/vibemon` Work
+   State handoff — goes through a separate guard that **rejects** secrets,
+   code, terminal output and absolute paths instead of editing them
+   (`_shared/textGuard.ts`), so what you previewed is exactly what is
+   stored, or nothing is.
+
 4. **Reproducible build** — `scripts/build.py --check` ensures the
    committed `dist/install.sh` is exactly what `src/` produces. No room
    for a hidden change in the binary that doesn't appear in the source
@@ -171,6 +181,19 @@ the result), to learn which tools agents actually use. If either config
 file cannot be parsed, registration is skipped and the file is left
 exactly as it was. To disconnect, remove the `mcpServers.vibemon`
 entry.
+
+### `/vibemon` — the one place agent-written text is sent
+
+When **you** run `/vibemon` in your agent, it writes a short Work State
+(summary, done / remaining items, blocker, next action, decisions, and the
+checks it says it ran), **shows it to you**, and sends it only after you
+choose to. The agent cannot run the command on its own
+(`disable-model-invocation`), and delivering it to anyone — including your
+own next session — asks for permission once more. VibeMon adds what it
+observed itself (test runs, commits, pushes, PR checks on that branch) when
+the handoff is read; the agent cannot fill those in. The server rejects
+secrets, code, terminal output, absolute paths and env values (422) rather
+than editing them. Push notifications carry only the project name.
 
 ---
 

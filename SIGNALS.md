@@ -100,15 +100,28 @@ Order of substring matching in [src/extract.py](src/extract.py)
 
 ---
 
-## Forward compatibility
+## Forward compatibility — server allowlist (since 2026-11-13)
 
-The server (vibemon-app `/hook` function) treats `signals` as JSONB and
-stores all keys verbatim. New client signal keys do not require server
-changes — they appear in `hook_events.signals` automatically.
+The server (vibemon-app `/hook`, `supabase/functions/_shared/hookPrivacy.ts`)
+stores **only the signal keys listed in this file**, each checked for type
+and shape (`filterSignals`). Unknown keys are dropped silently — a new client
+signal must be added to the server allowlist *before* clients start sending
+it, or it never reaches `hook_events.signals`.
 
-`additionalProperties: true` in the JSON Schema reflects this.
+Server-side normalisation:
+- `bash.head`: a value containing `=` (an env assignment like `TOKEN=… cmd`)
+  is dropped; a path is reduced to the binary name; text after a shell
+  operator (`&&`, `|`, `;`, `(`) is cut.
+- `commit.message`: first non-empty line, ≤ 200 chars.
 
-If a server-side feature wants to consume a new signal, it queries
-`signals->>'new.key'` directly. The server-side fallback extractor in
-`vibemon-app/supabase/functions/hook/index.ts` is only used to backfill
-signals when an outdated client (envelope `v=1`) connects.
+The payload is filtered the same way (`sanitizePayload`): only routing fields
+(tool name, session id, cwd, project root, hook event name, permission mode,
+model, agent type, durations, …) and `tool_input.file_path` are stored.
+`transcript_path` and any field not on the list are discarded.
+
+`additionalProperties: true` in the JSON Schema only means the *client* may
+send more; the server keeps the allowlisted subset.
+
+The server-side fallback extractor in `vibemon-app/supabase/functions/hook/index.ts`
+still backfills signals for an outdated client (envelope `v=1`); its output
+passes through the same allowlist.
